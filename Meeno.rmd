@@ -1,0 +1,162 @@
+---
+title: "Untitled"
+author: "Meeno Wilken"
+date: "2023-06-27"
+output: html_document
+---
+```{r}
+rm(list = ls())
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+```
+#Loading data
+```{r}
+df_Leads <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+#Benchmark. Taken from the lecture
+```{r}
+#Average daily leads over the entire time period by lead type
+Model1 <- lm(NextDayLeads ~ Type, data <- df_Leads)
+Model1
+
+#Average daily leads in April 2022 by lead type
+Model2 <- lm(NextDayLeads ~ Type, data <- df_Leads %>%
+filter(DateCreated >= ymd('2022-4-01'), DateCreated <= ymd('2022-04-30')))
+Model2
+
+predictions <- df_Leads %>% 
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat1 = predict(Model1, newdata <- .),
+            yhat2 = predict(Model2, newdata <- .),
+            # Model 3: Weighted average of models 1 and 2 
+            yhat3 = .33*yhat1 + .67*yhat2)
+
+#RMSE function
+RMSE <- function(yhat, y) {
+  return(sqrt( mean((yhat - y)^2)))
+}
+
+#Evaluation Matrix. 
+evaluation <- predictions %>% 
+  filter(DateCreated >= ymd('2023-03-01'),
+         DateCreated <= ymd('2023-03-30')) %>% 
+  summarise_at(.vars = vars(starts_with('yhat')),
+               .funs = funs(RMSE(., NextDayLeads)))
+
+#Output of the three models
+evaluation
+```
+#EDA 
+#The following three graphs are copied from the slides. 
+```{r}
+#Graph 1: NextDayLeads over Time
+df_Leads %>%
+  ggplot( aes(x = DateCreated, 
+              y = NextDayLeads)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  labs(title = "NextDayLeads over Time")
+
+#Graph 2: Adds by Clicks, Money Spent, Platform and Funnel
+df_Ads %>%
+  ggplot( aes( x = Spend, 
+               y = Clicks, 
+               color = Platform, 
+               shape = Funnel)) +
+  geom_point() + 
+  labs(title = "Adds by Total Clicks and Money Spent")
+
+#Graph 3: The two variables from the df_Traffic over Time
+df_Traffic %>%
+  pivot_longer(cols = 2:3, "Type", values_to = "values") %>%
+  ggplot( aes(x = Date, 
+              y = values)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  labs(title = "TimeSpent and Visits from the df_Traffic")
+```
+
+```{r}
+#The US Economic Policy Uncertainty Index over the Time Period available
+df_Macro %>%
+  filter(Date >= min(df_Leads$DateCreated),
+         Date <= max(df_Leads$DateCreated)) %>%
+  ggplot( aes( x = Date,
+               y = `US Economic Policy Uncertainty Index`)) + 
+  geom_line() +
+  labs(title = "US Economic Policy Uncertainty Index between 04/04/2020 and 03/31/2023")
+
+#The DAX over the Time Period available
+df_Macro %>%
+  filter(Date >= min(df_Leads$DateCreated),
+         Date <= max(df_Leads$DateCreated)) %>%
+  ggplot( aes( x = Date,
+               y = DAX)) + 
+  geom_line() +
+  labs(title = "Deutscher Aktien Index between 04/04/2020 and 03/31/2023")
+
+```
+```{r}
+# Compute correlation matrix using the numeric variables
+corr_matrix <- df_Macro %>% 
+  select(-Date) %>%
+  rename(Bundesanleihen = colnames(.)[2],
+         Gold = colnames(.)[3],
+         Electricity = colnames(.)[4],
+         Oil = colnames(.)[5],
+         FFF = colnames(.)[6],
+         Job_posting = colnames(.)[7],
+         USEPUI = colnames(.)[8],
+         BDI = colnames(.)[9],
+         Yield_Spread_GER = colnames(.)[10],
+         Yield_Spread_US = colnames(.)[11],
+         USD_EUR = colnames(.)[12],
+         USCB = colnames(.)[13]) %>%
+  cor(use="pairwise.complete.obs")
+
+corr_matrix[upper.tri(corr_matrix)] <- NA
+
+melt(corr_matrix) %>%
+# Visualize correlation matrix as a heatmap
+ggplot(aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(size = 14, face = "bold")) +
+  ggtitle("Pairwise Correlations of the available Macroeconomic Data") 
+
+```
+```{r}
+df_Leads %>%
+  mutate(year_week =  paste( year(DateCreated), week(DateCreated), sep = "-")) %>%
+  group_by(year_week) %>%
+  summarise(sum = sum(NextDayLeads)) %>%
+  ggplot( aes(x = year_week, 
+              y = sum)) +
+  geom_point() +
+  geom_smooth() +
+  theme(axis.text.x = element_text(angle = 45)) + 
+  #scale_x_discrete( breaks = df_Leads$year_week[ seq(1, 159, by = 10)]) + 
+  labs(title = "NextDayLeads over Time by Week") 
+```
+
+#Feature Engineering
+```{r}
+df_Leads <- df_Leads %>%
+  mutate(weekday = ordered(weekdays(DateCreated), levels = c("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")),
+         binary = ifelse(NextDayLeads > 0, 1, 0))
+```
+
