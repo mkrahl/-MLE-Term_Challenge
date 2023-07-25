@@ -1,0 +1,74 @@
+```{r}
+rm(list = ls())
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(zoo)    
+```
+
+```{r}
+df_Leads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+
+```{r}
+## Data Exploration
+
+#Graph 1: NextDayLeads over Time
+df_Leads %>%
+  ggplot( aes(x = DateCreated, 
+              y = NextDayLeads)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  labs(title = "NextDayLeads over Time")
+
+Manual = df_Leads[df_Leads$Type =="Manual",]
+Website = df_Leads[df_Leads$Type =="Website",]
+
+Manual$weekly_moving_average = rollmean(Manual$NextDayLeads, k = 7,align = "right",fill="extend")
+Website$weekly_moving_average = rollmean(Website$NextDayLeads, k = 7,align = "right",fill = "extend")
+
+Manual %>%
+  ggplot( aes(x = DateCreated,
+            y = weekly_moving_average))+
+            geom_line()+
+            labs(title = "Weekly Moving Average for Manual NextDayLeads")
+Website %>%
+  ggplot( aes(x = DateCreated,
+            y = weekly_moving_average))+
+            geom_line()+labs(title = "NextDayLeads over Time for Wesite NextDayLeads")
+
+df_Ads %>%
+  group_by(Date) %>%
+  summarise(Impressions = sum(Impressions),Clicks=sum(Clicks),Spend=sum(Spend)) %>%
+  
+Manual <- merge(Manual,daily_ads,by=Date)
+Website <- merge(Manual,daily_ads,by=Date) 
+
+Manual %>%
+  ggplot(aes( x = NextDayLeads, 
+               y = Clicks)) +
+  geom_point() + 
+  labs(title = "Adds by Total Clicks and Money Spent")
+
+# T
+
+```
+
+```{r}
+## This function performs the necessary data preparation and feature engineering.
+## Please use this function to create the data that the model is evaluated on.
+## input: Lead data, ad data; traffic data, macro data
+## Output: One data frame for each type (website and manual leads) containing all information needed to make predictions.
+
+prep_data = function(leads = df_Leads ,ads = df_Ads ,traffic = df_Traffic ,macro = df_Macro){
+  
+}
+```
+
+
