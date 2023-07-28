@@ -1,0 +1,111 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+rm(list = ls())
+# Load the necessary libraries
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+```
+#Loading data
+```{r}
+df_Leads <- readxl::read_xlsx('/Users/home/Downloads/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('/Users/home/Downloads/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('/Users/home/Downloads/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('/Users/home/Downloads/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+
+```{r}
+# Convert Date column to Date format (if not already done)
+df_Traffic$Date <- as.Date(df_Traffic$Date)
+
+ggplot(df_Traffic, aes(x = Visits)) +
+  geom_density(fill = "skyblue", color = "black") +
+  labs(x = "Visits", y = "Density", title = "Distribution of Visits (Density Plot)")
+
+ggplot(df_Traffic, aes(x = TimeSpent)) +
+  geom_density(fill = "skyblue", color = "black") +
+  labs(x = "TimeSpent", y = "Density", title = "Distribution of TimeSpent (Density Plot)")
+
+# Traffic changes over time
+ggplot(df_Traffic, aes(x = Date, y = Visits)) +
+  geom_line(color = "blue") +
+  labs(x = "Date", y = "Visits", title = "Traffic Changes over Time")
+
+# Traffic changes over time
+ggplot(df_Traffic, aes(x = Date, y = TimeSpent)) +
+  geom_line(color = "blue") +
+  labs(x = "Date", y = "TimeSpent", title = "TimeSpent Changes over Time")
+
+```
+
+```{r}
+str(df_Traffic)
+str(df_Leads)
+df_Traffic <- df_Traffic %>%
+  left_join(df_Leads, by = c("Date" = "DateCreated"))
+str(df_Traffic)
+```
+
+```{r}
+# Correlation between "Visits" and "TimeSpent"
+correlation <- cor(df_Traffic$Visits, df_Traffic$TimeSpent)
+print(paste("Correlation between Visits and TimeSpent:", correlation))
+
+# Convert Date column to Date format (if not already done)
+df_Traffic$Date <- as.Date(df_Traffic$Date)
+
+# Scatter plot: Visits vs. TimeSpent
+ggplot(df_Traffic, aes(x = Visits, y = TimeSpent)) +
+  geom_point() +
+  labs(x = "Visits", y = "Time Spent", title = "Scatter Plot: Visits vs. Time Spent")
+
+# Scatter plot: Visits vs. NextDayLeads
+ggplot(df_Traffic, aes(x = Visits, y = NextDayLeads)) +
+  geom_point() +
+  labs(x = "Visits", y = "Next Day Leads", title = "Scatter Plot: Visits vs. Next Day Leads")
+
+# Scatter plot: TimeSpent vs. NextDayLeads
+ggplot(df_Traffic, aes(x = TimeSpent, y = NextDayLeads)) +
+  geom_point() +
+  labs(x = "Time Spent", y = "Next Day Leads", title = "Scatter Plot: Time Spent vs. Next Day Leads")
+
+```
+
+```{r}
+# Correlation between "Visits" and "TimeSpent"
+correlation <- cor(df_Traffic$Visits, df_Traffic$TimeSpent)
+print(paste("Correlation between Visits and TimeSpent:", correlation))
+
+# Grouped bar plot: Mean Visits and TimeSpent by Type
+df_Traffic %>%
+  group_by(Type) %>%
+  summarize(Mean_Visits = mean(Visits),
+            Mean_TimeSpent = mean(TimeSpent)) %>%
+  ggplot(aes(x = Type, y = Mean_Visits, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(Mean_Visits, 2)), position = position_dodge(width = 0.9), vjust = -0.5) +
+  labs(x = "Type", y = "Mean Visits", title = "Mean Visits by Type")
+
+# Grouped bar plot: Mean NextDayLeads by Type
+df_Traffic %>%
+  group_by(Type) %>%
+  summarize(Mean_NextDayLeads = mean(NextDayLeads)) %>%
+  ggplot(aes(x = Type, y = Mean_NextDayLeads, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(Mean_NextDayLeads, 5)), position = position_dodge(width = 0.9), vjust = -0.5) +
+  labs(x = "Type", y = "Mean Next Day Leads", title = "Mean Next Day Leads by Type")
+
+# Box plot: TimeSpent by Type
+ggplot(df_Traffic, aes(x = Type, y = TimeSpent, fill = Type)) +
+  geom_boxplot() +
+  labs(x = "Type", y = "Time Spent", title = "Box Plot: Time Spent by Type")
+
+```
+
+
