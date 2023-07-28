@@ -12,6 +12,8 @@ library(ggplot2)
 library(gridExtra)
 library(tidyr)
 library(data.table)
+library(reshape2)
+library(zoo)
 ```
 #Loading data
 ```{r}
@@ -31,12 +33,12 @@ Model2 <- lm(NextDayLeads ~ Type, data <- df_Leads %>%
 filter(DateCreated >= ymd('2022-4-01'), DateCreated <= ymd('2022-04-30')))
 Model2
 
-predictions <- df_Leads %>% 
+predictions <- df_Leads %>%
   transmute(DateCreated,
             NextDayLeads,
             yhat1 = predict(Model1, newdata <- .),
             yhat2 = predict(Model2, newdata <- .),
-            # Model 3: Weighted average of models 1 and 2 
+            # Model 3: Weighted average of models 1 and 2
             yhat3 = .33*yhat1 + .67*yhat2)
 
 #RMSE function
@@ -44,22 +46,22 @@ RMSE <- function(yhat, y) {
   return(sqrt( mean((yhat - y)^2)))
 }
 
-#Evaluation Matrix. 
-evaluation <- predictions %>% 
+#Evaluation Matrix.
+evaluation <- predictions %>%
   filter(DateCreated >= ymd('2023-03-01'),
-         DateCreated <= ymd('2023-03-30')) %>% 
+         DateCreated <= ymd('2023-03-30')) %>%
   summarise_at(.vars = vars(starts_with('yhat')),
                .funs = funs(RMSE(., NextDayLeads)))
 
 #Output of the three models
 evaluation
 ```
-#EDA 
-#The following three graphs are copied from the slides. 
+#EDA
+#The following three graphs are copied from the slides.
 ```{r}
 #Graph 1: NextDayLeads over Time
 df_Leads %>%
-  ggplot( aes(x = DateCreated, 
+  ggplot( aes(x = DateCreated,
               y = NextDayLeads)) +
   geom_line() +
   facet_wrap(~Type) +
@@ -67,46 +69,47 @@ df_Leads %>%
 
 #Graph 2: Adds by Clicks, Money Spent, Platform and Funnel
 df_Ads %>%
-  ggplot( aes( x = Spend, 
-               y = Clicks, 
-               color = Platform, 
+  ggplot( aes( x = Spend,
+               y = Clicks,
+               color = Platform,
                shape = Funnel)) +
-  geom_point() + 
+  geom_point() +
   labs(title = "Adds by Total Clicks and Money Spent")
 
 #Graph 3: The two variables from the df_Traffic over Time
 df_Traffic %>%
-  pivot_longer(cols = 2:3, "Type", values_to = "values") %>%
-  ggplot( aes(x = Date, 
+  pivot_longer(cols = 2:3, names_to = "Type", values_to = "values") %>%
+  ggplot( aes(x = Date,
               y = values)) +
   geom_line() +
   facet_wrap(~Type) +
   labs(title = "TimeSpent and Visits from the df_Traffic")
 ```
 
+#EDA for the Macro Economic Data
 ```{r}
 #The US Economic Policy Uncertainty Index over the Time Period available
 df_Macro %>%
   filter(Date >= min(df_Leads$DateCreated),
-         Date <= max(df_Leads$DateCreated)) %>%
+         Date <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
   ggplot( aes( x = Date,
-               y = `US Economic Policy Uncertainty Index`)) + 
+               y = `US Economic Policy Uncertainty Index`)) +
   geom_line() +
   labs(title = "US Economic Policy Uncertainty Index between 04/04/2020 and 03/31/2023")
 
 #The DAX over the Time Period available
 df_Macro %>%
   filter(Date >= min(df_Leads$DateCreated),
-         Date <= max(df_Leads$DateCreated)) %>%
+         Date <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
   ggplot( aes( x = Date,
-               y = DAX)) + 
+               y = DAX)) +
   geom_line() +
   labs(title = "Deutscher Aktien Index between 04/04/2020 and 03/31/2023")
 
 ```
 ```{r}
 # Compute correlation matrix using the numeric variables
-corr_matrix <- df_Macro %>% 
+corr_matrix <- df_Macro %>%
   select(-Date) %>%
   rename(Bundesanleihen = colnames(.)[2],
          Gold = colnames(.)[3],
@@ -122,11 +125,11 @@ corr_matrix <- df_Macro %>%
          USCB = colnames(.)[13]) %>%
   cor(use="pairwise.complete.obs")
 
-corr_matrix[upper.tri(corr_matrix)] <- NA
+corr_matrix[upper.tri(corr_matrix)] <- NA 
 
 melt(corr_matrix) %>%
 # Visualize correlation matrix as a heatmap
-ggplot(aes(x = Var1, y = Var2, fill = value)) + 
+ggplot(aes(x = Var1, y = Var2, fill = value)) +
   geom_tile() +
   scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
   theme_minimal() +
@@ -136,27 +139,176 @@ ggplot(aes(x = Var1, y = Var2, fill = value)) +
     axis.title.x = element_blank(),
     axis.title.y = element_blank(),
     plot.title = element_text(size = 14, face = "bold")) +
-  ggtitle("Pairwise Correlations of the available Macroeconomic Data") 
+  ggtitle("Pairwise Correlations of the available Macroeconomic Data")
+```
+
+#Prepare for EDA to compare NextDayLeads to Macro Data
+```{r}
+df <- df_Leads %>%
+  select(DateCreated, NextDayLeads)
+
+df_Macro <- inner_join(df, df_Macro, by = c("DateCreated" = "Date" )) #Join NextDayLeads to the Macro Dataframe
+
+#Compute Weekly Measures
+weekly_data <- df_Macro %>%
+  group_by(Week = week(DateCreated), Year = year(DateCreated)) %>%
+  summarise(DAX = last(DAX) - first(DAX),  #Weekly Increase of DAX
+            NextDayLeads = sum(NextDayLeads), #Weekly Sum of NextDayLeads
+            GermanElecPrice = mean(`German Electricity Price`),  #Average Energy Price
+            USEPUI = mean(`US Economic Policy Uncertainty Index`)) #Average US Uncertainty Index
+
+weekly_data %>%
+  ggplot( aes(x = DAX, y = NextDayLeads)) + 
+  geom_point()
+  labs(title = "NextDayLeads by Change in Dax (by Week)",
+       x = "Change in the DAX (difference between first of week to last of week")
+
+weekly_data %>%
+  ggplot( aes(x = USEPUI, y = NextDayLeads)) + 
+  geom_point() + geom_smooth(se = F) + 
+  labs(title = "NextDayLeads by US Economy Uncertainty Index (by Week)",
+       x = "US Economic Policy Uncertainty Index")
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = NextDayLeads)) + 
+  geom_point() + geom_smooth(se = F) + 
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price")
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = NextDayLeads)) + 
+  geom_point() + geom_smooth(se = F) + 
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price")
 
 ```
+
+```{r}
+breaks <- c(0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.26)
+labels <- c("0-0.05", "0.05-0.1", "0.1-0.15", "0.15-0.2", "0.2-0.25", "0.25-0.26")
+
+# Use cut() to convert the numeric column into a factor with intervals
+weekly_data$NextDayLeadsDis <- cut(weekly_data$NextDayLeads, breaks = breaks, labels = labels, include.lowest = TRUE)
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = NextDayLeads)) + 
+  geom_point(aes(color = NextDayLeadsDis)) + geom_smooth(se = F) + 
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price")
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = USEPUI, color = NextDayLeadsDis)) + 
+  geom_point() + 
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price")
+
+```
+
+#Leads summarizered by Week 
 ```{r}
 df_Leads %>%
   mutate(year_week =  paste( year(DateCreated), week(DateCreated), sep = "-")) %>%
   group_by(year_week) %>%
   summarise(sum = sum(NextDayLeads)) %>%
-  ggplot( aes(x = year_week, 
+  ggplot( aes(x = year_week,
               y = sum)) +
   geom_point() +
   geom_smooth() +
-  theme(axis.text.x = element_text(angle = 45)) + 
-  #scale_x_discrete( breaks = df_Leads$year_week[ seq(1, 159, by = 10)]) + 
-  labs(title = "NextDayLeads over Time by Week") 
+  theme(axis.text.x = element_text(angle = 45)) +
+  #scale_x_discrete( breaks = df_Leads$year_week[ seq(1, 159, by = 10)]) +
+  labs(title = "NextDayLeads over Time by Week")
+```
+#Data Processing
+#Deleting Outliers
+```{r}
+#Two values are very high (see Plot 2). They have to be deleted
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+#To allow for a flexible mean and sd, the measures are calculated by year. 
+summary_data <- df_Leads %>%
+  group_by(Year = format(DateCreated, "%Y")) %>%
+  summarise(
+    Mean_NextDayLeads = mean(NextDayLeads),
+    Sd_NextDayLeads = sd(NextDayLeads),
+    Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads  #Threshold is determined to begin 4 Sd over the Mean
+  ) %>%
+  select(Year, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = "Year") 
+
+df_Leads <- df_Leads %>%
+  filter(Threshold > NextDayLeads)
 ```
 
 #Feature Engineering
 ```{r}
+#Add a factor of Weekday
 df_Leads <- df_Leads %>%
   mutate(weekday = ordered(weekdays(DateCreated), levels = c("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")),
          binary = ifelse(NextDayLeads > 0, 1, 0))
 ```
 
+#Feature Engineering with rollapply() function
+```{r}
+s_window <- seq(1, 30, 2)
+df_train <- df_Leads %>% filter(DateCreated < '2023-02-01')
+df_test <- df_Leads %>% filter(DateCreated >= '2023-02-01')
+
+width_model <- function(s_window, df_train, df_test) {
+prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
+
+for (width in s_window) {
+  #Create leadsLastWeek
+  df_Leads <- df_Leads %>%
+  mutate(leadsLastWeek = rollapply( NextDayLeads, width = width, FUN = sum, align = "right", partial = T))
+  # Fit random forest model on training data
+  lm_model <- lm(NextDayLeads ~ weekday + leadsLastWeek,
+                 data = df_train)
+  
+  pred_train <- df_train %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- .))
+
+  pred_test <- df_test %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- df_test))
+ 
+  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+
+ 
+    # Append results to the prec_results data frame
+  prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
+  }
+return(prec_results)
+}
+
+window_values <- width_model(s_window, df_train, df_test)
+```
+
+
+```{r}
+df_Leads <- df_Leads %>%
+  mutate(leadsLast2 = rollapply( NextDayLeads, width = 2, FUN = sum, align = "right", partial = T),
+         leadsLast3 = rollapply( NextDayLeads, width = 3, FUN = sum, align = "right", partial = T))
+
+  # Fit random forest model on training data
+  lm_model <- lm(NextDayLeads ~ weekday + leadsLastWeek,
+                 data = df_train)
+  
+  pred_train <- df_train %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- .))
+
+  pred_test <- df_test %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- df_test))
+ 
+  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+```
