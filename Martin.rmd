@@ -30,6 +30,7 @@ df_Leads %>%
 Manual = df_Leads[df_Leads$Type =="Manual",]
 Website = df_Leads[df_Leads$Type =="Website",]
 
+# Graph 2: Weekly Moving Average of NextDayLeads
 Manual$weekly_moving_average = rollmean(Manual$NextDayLeads, k = 7,align = "right",fill="extend")
 Website$weekly_moving_average = rollmean(Website$NextDayLeads, k = 7,align = "right",fill = "extend")
 
@@ -43,18 +44,50 @@ Website %>%
             y = weekly_moving_average))+
             geom_line()+labs(title = "NextDayLeads over Time for Wesite NextDayLeads")
 
-df_Ads %>%
+# Graph 3: Relationship of Ad spending on NextDayLeads
+
+daily_ads <- df_Ads %>%
   group_by(Date) %>%
-  summarise(Impressions = sum(Impressions),Clicks=sum(Clicks),Spend=sum(Spend)) %>%
+  summarise(Impressions = sum(Impressions),Clicks=sum(Clicks),Spend=sum(Spend))
   
-Manual <- merge(Manual,daily_ads,by=Date)
-Website <- merge(Manual,daily_ads,by=Date) 
+Manual <- merge(Manual,daily_ads,by.x="DateCreated",by.y ="Date" )
+Website <- merge(Website,daily_ads,by.x="DateCreated",by.y ="Date") 
 
 Manual %>%
-  ggplot(aes( x = NextDayLeads, 
-               y = Clicks)) +
+  ggplot(aes( x = Spend, 
+               y = NextDayLeads)) +
   geom_point() + 
-  labs(title = "Adds by Total Clicks and Money Spent")
+  labs(title = "Relationship of Money Spend and Ads on Manual NextDayLeads")
+
+Website %>%
+  ggplot(aes( x = Spend, 
+               y = NextDayLeads)) +
+  geom_point() + 
+  labs(title = "Relationship of Money Spend and Ads on Website NextDayLeads")
+
+Manual %>%
+  ggplot(aes( x = Clicks, 
+               y = NextDayLeads)) +
+  geom_point() + 
+  labs(title = "Relationship of Ad Clicks and Manual NextDayLeads")
+
+Website %>%
+  ggplot(aes( x = Clicks, 
+               y = NextDayLeads)) +
+  geom_point() + 
+  labs(title = "Relationship of Ad Clicks and Website NextDayLeads")
+
+Manual %>%
+  ggplot(aes( x = Impressions, 
+               y = NextDayLeads)) +
+  geom_point() + 
+  labs(title = "Relationship of Ad Impression and Manual NextDayLeads")
+
+Website %>%
+  ggplot(aes( x = Impressions, 
+               y = NextDayLeads)) +
+  geom_point() + 
+  labs(title = "Relationship of Money Spend and Ads on Website NextDayLeads")
 
 # T
 
