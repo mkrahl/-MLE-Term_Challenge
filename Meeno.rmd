@@ -17,10 +17,10 @@ library(zoo)
 ```
 #Loading data
 ```{r}
-df_Leads <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Leads')
-df_Ads <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Ads')
-df_Traffic <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
-df_Macro <- readxl::read_xlsx('TermPaperChallenge.xlsx', sheet <- 'Macro')
+df_Leads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Macro')
 ```
 #Benchmark. Taken from the lecture
 ```{r}
