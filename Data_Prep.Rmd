@@ -19,19 +19,22 @@ library(timeDate)
 library(corrplot)
 library(caret)
 ```
-### Feature Engeneering and Data Preperation
+#Load Data
 ```{r}
 df_Leads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Leads')
 df_Ads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Ads')
 df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
 df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+
+### Feature Engeneering and Data Preperation
+```{r}
 ## Feature engineering. Idea: Add many features and select relevant ones later
 # Add columns NextDayLeads for each Manual and Website with date 
 
 data = data.frame(Date = df_Leads[df_Leads$Type =="Manual",]$DateCreated, NextDayLeads.Manual = df_Leads[df_Leads$Type =="Manual",]$NextDayLeads, NextDayLeads.Website = df_Leads[df_Leads$Type =="Website",]$NextDayLeads)
 
 # Add 7 and 30 day rolling Average for NextDayLeads for each Manual and Website Leads.
-
 data = cbind(data, NextDayLeads.Manual.7RA = rollapplyr(data$NextDayLeads.Manual, 7, mean, partial = TRUE)) # 7 day RA for Manual Leads
 data = cbind(data, NextDayLeads.Manual.30RA = rollapplyr(data$NextDayLeads.Manual, 30, mean, partial = TRUE)) # 30 day RA for Manual Leads
 data = cbind(data, NextDayLeads.Website.7RA = rollapplyr(data$NextDayLeads.Website, 7, mean, partial = TRUE)) # 7 day RA for Website Leads
@@ -67,10 +70,33 @@ data = merge(data, df_Macro, by="Date", all.x = TRUE)
 
 # Get official German Holidays (only country wide)
 holidaysDE = holiday(year= c(2020,2021,2022,2023), Holiday = listHolidays("DE"))
-# add column indicating if the next day is a work day.
-data <- data %>% mutate(isNextDayWorkDay = if_else(isBizday(as.timeDate(as.Date(Date)+1),holidays = holidaysDE, wday = 1:5), 1, 0))
+# add column indicating if the next day is a work day and month variable
+data <- data %>% 
+  mutate(isNextDayWorkDay = if_else(isBizday(as.timeDate(as.Date(Date)+1),holidays = holidaysDE, wday = 1:5), 1, 0),
+         month = factor(month(Date), labels = month.name))
 
 ```
+
+```{r}
+#Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
+data <- data %>%
+  fill(DAX,
+       `Bundesanleihen 10 Year`,
+       `Gold (in Euro)`,
+       `German Electricity Price`,
+       `Oilprice (Brent)`,
+       `Federal Funds Futures (Expectations in 12 Months)`,
+       `Job Postings in Germany on Indeed`, 
+       `US Economic Policy Uncertainty Index`,
+       `Baltic Exchange Dry Index (BDI)`,
+       `Yield Spread 10Y - 2Y (Germany)`, 
+       `Yield Spread 10Y - 2Y (US)`,
+       `Exchange Rate (1 USD = X EUR)`, 
+       `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
+       DAX_diff,
+       .direction = "down")
+```
+
 ### Feature Selection
 ```{r}
 subset_data = data %>% select(c(2,3,8,9,10,14,15,18,19,20,21,22,23,24,25,26,27,31,32))
