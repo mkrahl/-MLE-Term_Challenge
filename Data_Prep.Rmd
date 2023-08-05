@@ -27,25 +27,55 @@ df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Webs
 df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
 ```
 
-### Feature Engeneering and Data Preperation
+#Data Preprocessing
+```{r}
+#Deleting Outliers
+#Some observations have uniquely high value. These must be deleted to not effect the regression too much
+
+#To allow for a flexible mean and sd, the measures are calculated by year. 
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+summary_data <- df_Leads %>%
+  group_by(Year = format(DateCreated, "%Y")) %>%
+  summarise(
+    Mean_NextDayLeads = mean(NextDayLeads),
+    Sd_NextDayLeads = sd(NextDayLeads),
+    Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads  #Threshold is determined to begin 4 Sd over the Mean
+  ) %>%
+  select(Year, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = "Year") 
+
+df_Leads <- df_Leads %>%
+  filter(Threshold > NextDayLeads) %>%
+  select(-Year, -Threshold)
+```
+
+### Feature Engeneering
 ```{r}
 ## Feature engineering. Idea: Add many features and select relevant ones later
 # Add columns NextDayLeads for each Manual and Website with date 
-
-data = data.frame(Date = df_Leads[df_Leads$Type =="Manual",]$DateCreated, NextDayLeads.Manual = df_Leads[df_Leads$Type =="Manual",]$NextDayLeads, NextDayLeads.Website = df_Leads[df_Leads$Type =="Website",]$NextDayLeads)
+data = df_Leads %>%
+  pivot_wider(names_from = Type, values_from = NextDayLeads) %>%
+  rename(Date = DateCreated, 
+         NextDayLeads.Manual = Manual,
+         NextDayLeads.Website = Website)
 
 # Add 7 and 30 day rolling Average for NextDayLeads for each Manual and Website Leads.
-data = cbind(data, NextDayLeads.Manual.7RA = rollapplyr(data$NextDayLeads.Manual, 7, mean, partial = TRUE)) # 7 day RA for Manual Leads
-data = cbind(data, NextDayLeads.Manual.30RA = rollapplyr(data$NextDayLeads.Manual, 30, mean, partial = TRUE)) # 30 day RA for Manual Leads
-data = cbind(data, NextDayLeads.Website.7RA = rollapplyr(data$NextDayLeads.Website, 7, mean, partial = TRUE)) # 7 day RA for Website Leads
-data = cbind(data, NextDayLeads.Website.30RA = rollapplyr(data$NextDayLeads.Website, 30, mean, partial = TRUE)) # 30 day RA for Website Leads
+data = data %>%
+  mutate(NextDayLeads.Manual.7RA = rollapplyr(NextDayLeads.Manual, 7, mean, partial = TRUE, na.rm = T), # 7 day RA for Manual Leads
+         NextDayLeads.Manual.30RA = rollapplyr(NextDayLeads.Manual, 30, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
+         NextDayLeads.Website.7RA = rollapplyr(NextDayLeads.Website, 7, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
+         NextDayLeads.Website.30RA = rollapplyr(NextDayLeads.Website, 30, mean, partial = TRUE, na.rm = T)) # 30 day RA for Website Leads
 
 # Merge Advertisement data (clicks, impressions and money spend) and also compute 7day RA of those values
 # group ad data by day and sum up clicks, impressions and money spend per day
-
 daily_ads <- df_Ads %>%
   group_by(Date) %>%
-  summarise(AdImpressions = sum(Impressions),AdClicks=sum(Clicks),AdSpend=sum(Spend))
+  summarise(AdImpressions = sum(Impressions),
+            AdClicks= sum(Clicks),
+            AdSpend= sum(Spend))
 
 # Merging Ad data to our data set
 data = merge(data, daily_ads, by="Date", all.x = TRUE)
@@ -65,8 +95,11 @@ data = cbind(data, TimeSpent.7RA = rollapplyr(data$TimeSpent, 7, mean, partial =
 df_Macro = cbind(df_Macro[-1,], DAX_diff = diff(df_Macro$DAX))
 #merge
 data = merge(data, df_Macro, by="Date", all.x = TRUE)
+```
 
-# Add Boolean feature IsNextDayWorkDay, which indicates if the NEXT day is a workday (not a weekend or a holiday). Needs Package timeDate.
+#Feature Engineering based on Date
+```{r}
+# Add Boolean feature IsNextDayWorkDay, which indicates if the NEXT day is a workday (not a weekend or a holiday). Needs Package timeDate. Also add Month Factor Feature
 
 # Get official German Holidays (only country wide)
 holidaysDE = holiday(year= c(2020,2021,2022,2023), Holiday = listHolidays("DE"))
@@ -77,6 +110,7 @@ data <- data %>%
 
 ```
 
+#Data Wrangling
 ```{r}
 #Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
 data <- data %>%
@@ -99,7 +133,15 @@ data <- data %>%
 
 ### Feature Selection
 ```{r}
-subset_data = data %>% select(c(2,3,8,9,10,14,15,18,19,20,21,22,23,24,25,26,27,31,32))
+subset_data = data %>% 
+  select(c(2,3,8,9,10,14,15,18,19,20,21,22,23,24,25,26,27,31,32)) %>%
+  rename(Bundesanleihen = `Bundesanleihen 10 Year`,
+         Oilprice = `Oilprice (Brent)`,
+         FFF = `Federal Funds Futures (Expectations in 12 Months)`,
+         `Job Postings` = `Job Postings in Germany on Indeed`,
+         USEPUI = `US Economic Policy Uncertainty Index`,
+         BDI = `Baltic Exchange Dry Index (BDI)`,
+         `Yield Spread GER` = `Yield Spread 10Y - 2Y (Germany)`)
 M = cor(subset_data,use = "complete.obs")
 corrplot(M, method = 'color', order = 'alphabet',mar=c(0.1,0.1,0.1,0.1), type = "upper",tl.cex=0.5)
 
@@ -115,8 +157,6 @@ print(resultsManual)
 print(resultsWebsite)
 
 acf(data$NextDayLeads.Manual)
-
-
 ```
 
 
