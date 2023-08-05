@@ -1,0 +1,334 @@
+---
+title: "Untitled"
+author: "Meeno Wilken"
+date: "2023-06-27"
+output: html_document
+---
+```{r}
+rm(list = ls())
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(reshape2)
+library(zoo)
+```
+#Loading data
+```{r}
+df_Leads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+#Data Preprocessing
+#Deleting Outliers
+```{r}
+#Two values are very high (see Plot 2). They have to be deleted
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+#To allow for a flexible mean and sd, the measures are calculated by year. 
+summary_data <- df_Leads %>%
+  group_by(Year = format(DateCreated, "%Y")) %>%
+  summarise(
+    Mean_NextDayLeads = mean(NextDayLeads),
+    Sd_NextDayLeads = sd(NextDayLeads),
+    Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads  #Threshold is determined to begin 4 Sd over the Mean
+  ) %>%
+  select(Year, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = "Year") 
+
+df_Leads <- df_Leads %>%
+  filter(Threshold > NextDayLeads)
+```
+#EDA
+#The following three graphs are copied from the slides.
+```{r}
+#Graph 1: NextDayLeads over Time
+df_Leads %>%
+  ggplot( aes(x = DateCreated,
+              y = NextDayLeads)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads over Time")
+
+#Graph 2: Adds by Clicks, Money Spent, Platform and Funnel
+df_Ads %>%
+  ggplot( aes( x = Spend,
+               y = Clicks,
+               color = Platform,
+               shape = Funnel)) +
+  geom_point() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "Adds by Total Clicks and Money Spent")
+
+#Graph 3: The two variables from the df_Traffic over Time
+df_Traffic %>%
+  pivot_longer(cols = 2:3, names_to = "Type", values_to = "values") %>%
+  ggplot( aes(x = Date,
+              y = values)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "TimeSpent and Visits from the df_Traffic")
+```
+#Leads summarizered by Week 
+```{r}
+df <- df_Leads %>%
+  mutate(year_week =  paste( year(DateCreated), week(DateCreated), sep = "-")) %>%
+  group_by(year_week) %>%
+  summarise(sum = sum(NextDayLeads)) 
+
+df %>% ggplot( aes(x = year_week,
+                   y = sum)) +
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black"),
+        axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  labs(title = "NextDayLeads over Time by Week") +
+  scale_x_discrete(breaks = unique(df$year_week)[c(TRUE, rep(FALSE, 9))])
+```
+
+#Macro Economic Data
+```{r}
+df <- df_Leads %>%
+  select(DateCreated, NextDayLeads)
+
+df_Macro <- inner_join(df, df_Macro, by = c("DateCreated" = "Date")) #Join NextDayLeads to the Macro Dataframe
+
+#The US Economic Policy Uncertainty Index over the Time Period available
+df_Macro %>%
+  filter(DateCreated >= min(df_Leads$DateCreated),
+         DateCreated <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
+  ggplot( aes( x = DateCreated,
+               y = `US Economic Policy Uncertainty Index`)) +
+  geom_line() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "US Economic Policy Uncertainty Index between 04/04/2020 and 03/31/2023")
+
+#The DAX over the Time Period available
+df_Macro %>%
+  filter(DateCreated >= min(df_Leads$DateCreated),
+         DateCreated <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
+  ggplot( aes( x = DateCreated,
+               y = DAX)) +
+  geom_line() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "Deutscher Aktien Index between 04/04/2020 and 03/31/2023")
+
+
+# Compute correlation matrix using the numeric variables
+corr_matrix <- df_Macro %>%
+  select(-DateCreated) %>%
+  rename(Bundesanleihen = `Bundesanleihen 10 Year`,
+         Oilprice = `Oilprice (Brent)`,
+         FFF = `Federal Funds Futures (Expectations in 12 Months)`,
+         `Job Postings` = `Job Postings in Germany on Indeed`,
+         USEPUI = `US Economic Policy Uncertainty Index`,
+         BDI = `Baltic Exchange Dry Index (BDI)`,
+         `Yield Spread GER` = `Yield Spread 10Y - 2Y (Germany)`,
+         `Yield Spread US` = `Yield Spread 10Y - 2Y (US)`,
+         `USD EUR` = `Exchange Rate (1 USD = X EUR)`,
+         USCB = `US Corporate Bonds - Investment Grade - Option Adjusted Spread`) %>%
+  cor(use="pairwise.complete.obs")
+#Prepare Table: Remove repetitive Values
+corr_matrix[upper.tri(corr_matrix)] <- NA 
+diag(corr_matrix) <- NA
+corr_matrix <- apply(corr_matrix, 2, rev)
+corr_matrix <- corr_matrix[-nrow(corr_matrix), -ncol(corr_matrix)]
+
+melt(corr_matrix) %>%
+# Visualize correlation matrix as a heatmap
+ggplot(aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()) +
+  ggtitle("Pairwise Correlations of the available Macroeconomic Data")
+```
+
+#Prepare for EDA to compare NextDayLeads to Macro Data
+```{r}
+#Compute Weekly Measures
+weekly_data <- df_Macro %>%
+  group_by(Week = week(DateCreated), Year = year(DateCreated)) %>%
+  summarise(DAX = last(DAX) - first(DAX),  #Weekly Increase of DAX
+            NextDayLeads = sum(NextDayLeads), #Weekly Sum of NextDayLeads
+            GermanElecPrice = mean(`German Electricity Price`),  #Average Energy Price
+            USEPUI = mean(`US Economic Policy Uncertainty Index`)) #Average US Uncertainty Index
+```
+
+#Further EDA
+```{r}
+weekly_data %>%
+  ggplot( aes(x = DAX, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by Change in Dax (by Week)",
+       x = "Change in the DAX (difference between first of week to last of week",
+       color = "Year")
+
+weekly_data %>%
+  ggplot( aes(x = USEPUI, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by US Economy Uncertainty Index (by Week)",
+       x = "US Economic Policy Uncertainty Index",
+       color = "Year")
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price",
+       color = "Year")
+
+```
+
+```{r}
+df_Traffic <- df_Traffic %>%
+  left_join(df_Leads, by = c("Date" = "DateCreated"))
+
+# Scatter plot: Visits vs. TimeSpent
+df_Traffic %>%
+  ggplot(aes(x = Visits, y = TimeSpent, color = NextDayLeads)) +
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black"))+
+  labs(x = "Visits", y = "Time Spent", title = "Scatter Plot: Visits by Time Spent and NextDayLeads") +
+  scale_color_gradient(low = "blue", high = "red", na.value = "white")
+
+```
+
+```{r}
+#Aggregate df_ads by Date
+df_Ads <- df_Ads %>%
+  group_by(Date) %>%
+  summarise(Spend = sum(Spend),
+            Impressions = sum(Impressions),
+            Clicks = sum(Clicks))
+
+#Aggregate df_traffic by Date
+#df_Traffic is already joint with df_Leads
+df_Traffic <- df_Traffic %>%
+  group_by(Date) %>%
+  summarise(Visits = sum(Visits),
+            TimeSpent = sum(TimeSpent),
+            NextDayLeads = sum(NextDayLeads))
+
+#Calculate Correlation Matrix
+corr_matrix <- df_Ads %>%
+  left_join(df_Traffic, by = "Date") %>%
+  select(-Date) %>%
+  cor(use="pairwise.complete.obs")
+
+#Prepare Table: Remove repetitive Values
+corr_matrix[upper.tri(corr_matrix)] <- NA 
+diag(corr_matrix) <- NA
+corr_matrix <- apply(corr_matrix, 2, rev)
+corr_matrix <- corr_matrix[-nrow(corr_matrix), -ncol(corr_matrix)]
+
+melt(corr_matrix) %>%
+# Visualize correlation matrix as a heatmap
+ggplot(aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()) +
+  ggtitle("Pairwise Correlations of the Traffic, Ads and Leads Data")
+
+```
+
+#Feature Engineering
+```{r}
+#Add a factor of Weekday
+df_Leads <- df_Leads %>%
+  mutate(weekday = ordered(weekdays(DateCreated), levels = c("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")),
+         binary = ifelse(NextDayLeads > 0, 1, 0))
+```
+
+#Feature Engineering with rollapply() function
+```{r}
+s_window <- seq(1, 30, 2)
+df_train <- df_Leads %>% filter(DateCreated < '2023-02-01')
+df_test <- df_Leads %>% filter(DateCreated >= '2023-02-01')
+
+width_model <- function(s_window, df_train, df_test) {
+prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
+
+for (width in s_window) {
+  #Create leadsLastWeek
+  df_Leads <- df_Leads %>%
+  mutate(leadsLastWeek = rollapply( NextDayLeads, width = width, FUN = sum, align = "right", partial = T))
+  # Fit random forest model on training data
+  lm_model <- lm(NextDayLeads ~ weekday + leadsLastWeek,
+                 data = df_train)
+  
+  pred_train <- df_train %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- .))
+
+  pred_test <- df_test %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- df_test))
+ 
+  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+
+ 
+    # Append results to the prec_results data frame
+  prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
+  }
+return(prec_results)
+}
+
+window_values <- width_model(s_window, df_train, df_test)
+```
+
+```{r}
+df_Leads <- df_Leads %>%
+  mutate(leadsLast2 = rollapply( NextDayLeads, width = 2, FUN = sum, align = "right", partial = T),
+         leadsLast3 = rollapply( NextDayLeads, width = 3, FUN = sum, align = "right", partial = T))
+
+  # Fit random forest model on training data
+  lm_model <- lm(NextDayLeads ~ weekday + leadsLastWeek,
+                 data = df_train)
+  
+  pred_train <- df_train %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- .))
+
+  pred_test <- df_test %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- df_test))
+ 
+  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+```
