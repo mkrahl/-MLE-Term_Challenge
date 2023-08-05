@@ -249,6 +249,49 @@ df_Leads <- df_Leads %>%
          binary = ifelse(NextDayLeads > 0, 1, 0))
 ```
 
+#Feature Preselection
+```{r}
+df_Leads <- data %>%
+  select( -Date, -NextDayLeads.Manual.7RA, NextDayLeads.Manual.30RA, NextDayLeads.Website.30RA, NextDayLeads.Website.7RA)
+
+s_window <- seq(1, 30, 2)
+df_train <- df_Leads %>% filter(DateCreated < '2023-02-01')
+df_test <- df_Leads %>% filter(DateCreated >= '2023-02-01')
+
+width_model <- function(s_window, df_train, df_test) {
+prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
+
+for (width in s_window) {
+  #Create leadsLastWeek
+  df_Leads <- df_Leads %>%
+  mutate(leadsLastWeek = rollapply( NextDayLeads, width = width, FUN = sum, align = "right", partial = T))
+  # Fit random forest model on training data
+  lm_model <- lm(NextDayLeads ~ .,
+                 data = df_train)
+  
+  pred_train <- df_train %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- .))
+
+  pred_test <- df_test %>%
+  transmute(DateCreated,
+            NextDayLeads,
+            yhat = predict(lm_model, newdata <- df_test))
+ 
+  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+
+ 
+    # Append results to the prec_results data frame
+  prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
+  }
+return(prec_results)
+}
+
+window_values <- width_model(s_window, df_train, df_test)
+```
+
 #Feature Engineering with rollapply() function
 ```{r}
 s_window <- seq(1, 30, 2)
