@@ -71,14 +71,14 @@ data = data %>%
 
 # Merge Advertisement data (clicks, impressions and money spend) and also compute 7day RA of those values
 # group ad data by day and sum up clicks, impressions and money spend per day
-daily_ads <- df_Ads %>%
+df_Ads <- df_Ads %>%
   group_by(Date) %>%
   summarise(AdImpressions = sum(Impressions),
             AdClicks= sum(Clicks),
             AdSpend= sum(Spend))
 
 # Merging Ad data to our data set
-data = merge(data, daily_ads, by="Date", all.x = TRUE)
+data = merge(data, df_Ads, by="Date", all.x = TRUE)
 # 7 day RA of impressions, clicks and money spend
 data = cbind(data, AdImpressions.7RA = rollapplyr(data$AdImpressions, 7, mean, partial = TRUE)) 
 data = cbind(data, AdClicks.7RA = rollapplyr(data$AdClicks, 7, mean, partial = TRUE)) 
@@ -159,4 +159,7 @@ print(resultsWebsite)
 acf(data$NextDayLeads.Manual)
 ```
 
+```{r}
+
+```
 
