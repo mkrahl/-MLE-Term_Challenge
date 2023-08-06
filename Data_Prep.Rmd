@@ -27,40 +27,68 @@ df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Webs
 df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
 ```
 
-#Data Preprocessing
+#Data Preprocessing (Leads Data)
 ```{r}
 #Deleting Outliers
 #Some observations have uniquely high value. These must be deleted to not effect the regression too much
 
-#To allow for a flexible mean and sd, the measures are calculated by year. 
+#The EDA showed that the number of Leads is increasing over time. To allow for a flexible mean and sd, the measures are calculated by year. 
 df_Leads <- df_Leads %>%
   mutate(Year = format(DateCreated, "%Y"))
 
 summary_data <- df_Leads %>%
-  group_by(Year = format(DateCreated, "%Y")) %>%
-  summarise(
-    Mean_NextDayLeads = mean(NextDayLeads),
-    Sd_NextDayLeads = sd(NextDayLeads),
-    Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads  #Threshold is determined to begin 4 Sd over the Mean
-  ) %>%
-  select(Year, Threshold)
+  group_by(Year, Type)%>%
+  summarise(Mean_NextDayLeads = mean(NextDayLeads),
+            Sd_NextDayLeads = sd(NextDayLeads),
+            Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads) %>%  #Threshold is determined to begin 4 Sd over the Mean
+  select(Year, Type, Threshold)
 
-df_Leads <- merge(df_Leads, summary_data, by = "Year") 
+df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
 
 df_Leads <- df_Leads %>%
   filter(Threshold > NextDayLeads) %>%
   select(-Year, -Threshold)
-```
 
-### Feature Engeneering
-```{r}
-## Feature engineering. Idea: Add many features and select relevant ones later
 # Add columns NextDayLeads for each Manual and Website with date 
-data = df_Leads %>%
+data <- df_Leads %>%
   pivot_wider(names_from = Type, values_from = NextDayLeads) %>%
-  rename(Date = DateCreated, 
+  rename(Date = DateCreated, #Rename columns
          NextDayLeads.Manual = Manual,
          NextDayLeads.Website = Website)
+```
+
+#Data Preproccesing (Traffic Data)
+```{r}
+#The Traffic Data started late. The first rows which are wrongfully zero have to be deleted. 
+df_Traffic <- df_Traffic[which(df_Traffic$Visits != 0)[1]:nrow(df_Traffic), ]
+```
+
+#Data Prepoccessing (Macro-Economic Data)
+```{r}
+df_Macro <- df_Macro %>%
+  complete(Date = seq(min(Date), max(Date), by = "day"))
+
+#Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
+df_Macro <- df_Macro %>%
+  fill(DAX,
+       `Bundesanleihen 10 Year`,
+       `Gold (in Euro)`,
+       `German Electricity Price`,
+       `Oilprice (Brent)`,
+       `Federal Funds Futures (Expectations in 12 Months)`,
+       `Job Postings in Germany on Indeed`, 
+       `US Economic Policy Uncertainty Index`,
+       `Baltic Exchange Dry Index (BDI)`,
+       `Yield Spread 10Y - 2Y (Germany)`, 
+       `Yield Spread 10Y - 2Y (US)`,
+       `Exchange Rate (1 USD = X EUR)`, 
+       `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
+       .direction = "down")
+```
+
+### Feature Engineering
+```{r}
+#Idea: Add new features and select relevant ones later.
 
 # Add 7 and 30 day rolling Average for NextDayLeads for each Manual and Website Leads.
 data = data %>%
@@ -69,7 +97,7 @@ data = data %>%
          NextDayLeads.Website.7RA = rollapplyr(NextDayLeads.Website, 7, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
          NextDayLeads.Website.30RA = rollapplyr(NextDayLeads.Website, 30, mean, partial = TRUE, na.rm = T)) # 30 day RA for Website Leads
 
-# Merge Advertisement data (clicks, impressions and money spend) and also compute 7day RA of those values
+
 # group ad data by day and sum up clicks, impressions and money spend per day
 df_Ads <- df_Ads %>%
   group_by(Date) %>%
@@ -77,24 +105,28 @@ df_Ads <- df_Ads %>%
             AdClicks= sum(Clicks),
             AdSpend= sum(Spend))
 
-# Merging Ad data to our data set
-data = merge(data, df_Ads, by="Date", all.x = TRUE)
-# 7 day RA of impressions, clicks and money spend
-data = cbind(data, AdImpressions.7RA = rollapplyr(data$AdImpressions, 7, mean, partial = TRUE)) 
-data = cbind(data, AdClicks.7RA = rollapplyr(data$AdClicks, 7, mean, partial = TRUE)) 
-data = cbind(data, AdSpend.7RA = rollapplyr(data$AdSpend, 7, mean, partial = TRUE)) 
+# Add 7 and 30 day rolling Average for Impressions, Clicks and Spend.
+df_Ads = cbind(df_Ads, AdImpressions.7RA = rollapplyr(df_Ads$AdImpressions, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdClicks.7RA = rollapplyr(df_Ads$AdClicks, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdSpend.7RA = rollapplyr(df_Ads$AdSpend, 7, mean, partial = TRUE)) 
 
-# Merging Website Traffic data to our dataframe
-data = merge(data, df_Traffic, by="Date", all.x = TRUE)
-# 7 day RA of visits and time spent
-data = cbind(data, Visits.7RA = rollapplyr(data$Visits, 7, mean, partial = TRUE)) 
-data = cbind(data, TimeSpent.7RA = rollapplyr(data$TimeSpent, 7, mean, partial = TRUE)) 
 
-# merge macro data
-# First compute differences of DAX values
-df_Macro = cbind(df_Macro[-1,], DAX_diff = diff(df_Macro$DAX))
-#merge
-data = merge(data, df_Macro, by="Date", all.x = TRUE)
+# Add 7 day rolling Average for Visits and TimeSpent
+df_Traffic = cbind(df_Traffic, Visits.7RA = rollapplyr(df_Traffic$Visits, 7, mean, partial = TRUE)) 
+df_Traffic = cbind(df_Traffic, TimeSpent.7RA = rollapplyr(df_Traffic$TimeSpent, 7, mean, partial = TRUE)) 
+
+
+```
+
+#Data Merging
+```{r}
+#All Joins are Inner Joins. This way we avoid N/A values in the predictor columns. 
+# Merging Website Traffic data 
+data = merge(data, df_Traffic, by="Date")
+# Merging Macro data 
+data = merge(data, df_Macro, by="Date")
+# Merging Ad data 
+data = merge(data, df_Ads, by="Date")
 ```
 
 #Feature Engineering based on Date
@@ -110,25 +142,18 @@ data <- data %>%
 
 ```
 
-#Data Wrangling
+#Split Data frames for Manual and Website
 ```{r}
-#Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
-data <- data %>%
-  fill(DAX,
-       `Bundesanleihen 10 Year`,
-       `Gold (in Euro)`,
-       `German Electricity Price`,
-       `Oilprice (Brent)`,
-       `Federal Funds Futures (Expectations in 12 Months)`,
-       `Job Postings in Germany on Indeed`, 
-       `US Economic Policy Uncertainty Index`,
-       `Baltic Exchange Dry Index (BDI)`,
-       `Yield Spread 10Y - 2Y (Germany)`, 
-       `Yield Spread 10Y - 2Y (US)`,
-       `Exchange Rate (1 USD = X EUR)`, 
-       `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
-       DAX_diff,
-       .direction = "down")
+data_manual <- data %>%
+  select(-Date, -NextDayLeads.Website) %>%
+  filter(!is.na(NextDayLeads.Manual))
+
+data_website <- data %>%
+  select(-Date, -NextDayLeads.Manual) %>%
+  filter(!is.na(NextDayLeads.Website))
+
+#Delete all other objects
+rm(list = setdiff(ls(), c("data_manual", "data_website")))
 ```
 
 ### Feature Selection
@@ -158,8 +183,3 @@ print(resultsWebsite)
 
 acf(data$NextDayLeads.Manual)
 ```
-
-```{r}
-
-```
-
