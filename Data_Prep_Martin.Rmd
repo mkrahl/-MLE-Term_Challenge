@@ -201,12 +201,14 @@ results_manual %>%
   geom_line(aes(y = rmse.train, color = "rmse.train")) +
   geom_line(aes(y = rmse.test, color = "rmse.test")) +
   scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))+
-  geom_smooth(aes(y=rmse.train, se = FALSE))
+  geom_smooth(aes(y=rmse.train, color = "rmse.train"))+
+  geom_smooth(aes(y=rmse.test, color = "rmse.test" ))
 
 results_website %>%
   ggplot( aes(x = ntrees)) + 
   geom_line(aes(y = rmse.train, color = "rmse.train")) +
   geom_line(aes(y = rmse.test, color = "rmse.test")) +
   scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))+
-  geom_smooth(aes(y=rmse.train, se = FALSE))
+  geom_smooth(aes(y=rmse.train, color = "rmse.train"))+
+  geom_smooth(aes(y=rmse.test, color = "rmse.test" ))
 ```

@@ -29,7 +29,7 @@ df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Webs
 df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
 ```
 
-#Data Preprocessing (Leads Data)
+# 1. Data Preprocessing (Leads Data)
 ```{r}
 #Deleting Outliers
 #Some observations have uniquely high value. These must be deleted to not effect the regression too much
@@ -60,13 +60,13 @@ data <- df_Leads %>%
 
 ```
 
-#Data Preproccesing (Traffic Data)
+# 2. Data Preproccesing (Traffic Data)
 ```{r}
 #The Traffic Data started late. The first rows which are wrongfully zero have to be deleted. 
 df_Traffic <- df_Traffic[which(df_Traffic$Visits != 0)[1]:nrow(df_Traffic), ]
 ```
 
-#Data Prepoccessing (Macro-Economic Data)
+# 3. Data Prepoccessing (Macro-Economic Data)
 ```{r}
 df_Macro <- df_Macro %>%
   complete(Date = seq(min(Date), max(Date), by = "day"))
@@ -93,7 +93,7 @@ colnames(df_Macro) <- gsub(" ", "_", colnames(df_Macro))
 colnames(df_Macro) <- gsub("[\\(\\)=\\-]", "", colnames(df_Macro))
 ```
 
-### Feature Engineering
+### 4. Feature Engineering
 ```{r}
 #Idea: Add new features and select relevant ones later.
 
@@ -104,7 +104,7 @@ df_Ads <- df_Ads %>%
             AdClicks= sum(Clicks),
             AdSpend= sum(Spend))
 
-# Add 7 and 30 day rolling Average for Impressions, Clicks and Spend.
+# Add 7 day rolling Average for Impressions, Clicks and Spend.
 df_Ads = cbind(df_Ads, AdImpressions.7RA = rollapplyr(df_Ads$AdImpressions, 7, mean, partial = TRUE)) 
 df_Ads = cbind(df_Ads, AdClicks.7RA = rollapplyr(df_Ads$AdClicks, 7, mean, partial = TRUE)) 
 df_Ads = cbind(df_Ads, AdSpend.7RA = rollapplyr(df_Ads$AdSpend, 7, mean, partial = TRUE)) 
@@ -116,7 +116,7 @@ df_Traffic = cbind(df_Traffic, TimeSpent.7RA = rollapplyr(df_Traffic$TimeSpent, 
 ```
 
 ```{r}
-# Add 7 and 30 day rolling Average for NextDayLeads for each Manual and Website Leads.
+# Add 4 and 7 day rolling Average for NextDayLeads for each Manual and Website Leads.
 data = data %>%
   mutate(NextDayLeads.Manual.1RA = lag(NextDayLeads.Manual),
          NextDayLeads.Website.1RA = lag(NextDayLeads.Website),
@@ -127,7 +127,7 @@ data = data %>%
   select(-NextDayLeads.Manual.1RA, -NextDayLeads.Website.1RA)
 ```
 
-#Data Merging
+# 5. Data Merging
 ```{r}
 #All Joins are Inner Joins. This way we avoid N/A values in the predictor columns. 
 # Merging Website Traffic data 
@@ -138,7 +138,7 @@ data = merge(data, df_Macro, by="Date")
 data = merge(data, df_Ads, by="Date")
 ```
 
-#Feature Engineering based on Date
+# 6. Feature Engineering based on Date
 ```{r}
 # Add Boolean feature IsNextDayWorkDay, which indicates if the NEXT day is a workday (not a weekend or a holiday). Needs Package timeDate. Also add Month Factor Feature
 
@@ -151,7 +151,7 @@ data <- data %>%
 
 ```
 
-#Split Data frames for Manual and Website
+# 7. Split Data frames for Manual and Website
 ```{r}
 data_manual <- data %>%
   select(-NextDayLeads.Website) %>%
@@ -163,61 +163,88 @@ data_website <- data %>%
 ```
 
 
-#Feature Engineering with rollapply() function
+# Feature Engineering with rollapply() function
 ```{r}
-#The following graph illustrates how we came up with the rollapply() arguments. The result was then paste into the code above. 
-df <- data_manual %>%
+#The following graph illustrates how we came up with the width of the rolling mean. The result was then paste into the code above. 
+df_manual <- data_manual %>%
   select(-NextDayLeads.Manual.4RA, -NextDayLeads.Manual.7RA, -NextDayLeads.Website.4RA, -NextDayLeads.Website.7RA) %>%
-  mutate(NextDayLeads.Manual.1RA = lag(NextDayLeads.Manual))
+  mutate(NextDayLeads.1RA = lag(NextDayLeads.Manual)) %>%
+  mutate(NextDayLeads = NextDayLeads.Manual) %>% select(-NextDayLeads.Manual)
+
+df_website <- data_website %>%
+  select(-NextDayLeads.Manual.4RA, -NextDayLeads.Manual.7RA, -NextDayLeads.Website.4RA, -NextDayLeads.Website.7RA) %>%
+  mutate(NextDayLeads.1RA = lag(NextDayLeads.Website)) %>%
+  mutate(NextDayLeads = NextDayLeads.Website) %>% select(-NextDayLeads.Website)
 
 s_window <- seq(1, 31, 2)
-df_test <- tail(df, 90) 
-df_train <- head(df, -90) %>% tail(-1)
+df_test_manual <- tail(df_manual, 90) 
+df_train_manual <- head(df_manual, -90) %>% tail(-1)
+df_test_website <- tail(df_website, 90) 
+df_train_website <- head(df_website, -90) %>% tail(-1)
 
 width_model <- function(s_window, df_train, df_test) {
-prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
-
-for (width in s_window) {
-  #Create leadsLastWeek
-  df_train <- df_train %>%
-  mutate(leadsLastWeek = rollapply( NextDayLeads.Manual.1RA, width = width, FUN = sum, align = "right", partial = T))
-  df_test <- df_test %>%
-  mutate(leadsLastWeek = rollapply( NextDayLeads.Manual.1RA, width = width, FUN = sum, align = "right", partial = T))
-  # Fit random forest model on training data
-  lm_model <- lm(NextDayLeads.Manual ~ . 
-                 -NextDayLeads.Manual.1RA -Date,
-                 data = df_train)
+  prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
   
-  # Make predictions on Train & Test Data
-  pred_train <- df_train %>%
-  transmute(NextDayLeads.Manual,
-            yhat = predict(lm_model, newdata <- df_train))
-
-  pred_test <- df_test %>%
-  transmute(NextDayLeads.Manual,
-            yhat = predict(lm_model, newdata <- df_test))
- 
-  # Calculate Train & Test RMSE
-  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads.Manual)^2))
-  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads.Manual)^2))
-
- 
-    # Append results to the prec_results data frame
-  prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
-  }
-return(prec_results)
+  for (width in s_window) {
+    #Create leadsLastWeek
+    df_train <- df_train %>%
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T))
+    df_test <- df_test %>%
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T))
+    # Fit random forest model on training data
+    lm_model <- lm(NextDayLeads ~ . 
+                   -NextDayLeads.1RA -Date,
+                   data = df_train)
+    
+    # Make predictions on Train & Test Data
+    pred_train <- df_train %>%
+    transmute(NextDayLeads,
+              yhat = predict(lm_model, newdata <- df_train))
+  
+    pred_test <- df_test %>%
+    transmute(NextDayLeads,
+              yhat = predict(lm_model, newdata <- df_test))
+   
+    # Calculate Train & Test RMSE
+    rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+    rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+  
+   
+      # Append results to the prec_results data frame
+    prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
+    }
+  return(prec_results)
 }
 
-window_values <- width_model(s_window, df_train, df_test)
+window_values_manual <- width_model(s_window, df_train_manual, df_test_manual)
+window_values_website <- width_model(s_window, df_train_website, df_test_website)
+
+
 
 # Plot precision and specificity of the train and test data. 
-window_values %>%
+window_values_manual %>%
   ggplot(aes(x = width)) +
   geom_line(aes(y = train_rmse, color = "Train RMSE")) +
   geom_line(aes(y = test_rmse, color = "Test RMSE")) +
   scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
   labs(x = "Width", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. width") +
+  ggtitle("Train/Test RMSE  vs. Rolling Average width for Manual Leads") +
+  theme(
+  plot.title = element_text(size = 14),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  panel.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_line(color = "gray80"),
+  panel.grid.minor = element_line(color = "gray90"),
+  panel.border = element_blank())
+
+window_values_website %>%
+  ggplot(aes(x = width)) +
+  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
+  geom_line(aes(y = test_rmse, color = "Test RMSE")) +
+  scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
+  labs(x = "Width", y = "RMSE", color = "RMSE Type") +
+  ggtitle("Train/Test RMSE  vs. Rolling average width for Website Leads") +
   theme(
   plot.title = element_text(size = 14),
   axis.title = element_text(size = 12),
@@ -232,61 +259,90 @@ window_values %>%
 #Clean up workspace
 rm(list = setdiff(ls(), c("data_manual", "data_website")))
 ```
+## Modeling & Hyperparameter Tuning
+```{R}
+#  Test the model on data from 2023 and train on the rest of the data.  We train random Forest with ntrees between 1 and 300 and check the optimum
+# Rename columns to remove spaces
+colnames(data_manual) <- make.names(colnames(data_manual), unique=TRUE)
+colnames(data_website) <- make.names(colnames(data_website), unique=TRUE)
+manual_train = data_manual %>% filter(Date <= '2023-01-01') %>% select(-Date)
+manual_test = data_manual %>% filter(Date > '2023-01-01') %>% select(-Date)
+website_train = data_website %>% filter(Date <= '2023-01-01') %>% select(-Date)
+website_test = data_website %>% filter(Date > '2023-01-01') %>% select(-Date)
 
-
-```{r}
-#The following graph shows the hyperparametric tuning for the number of trees
-s_ntrees <- c(2, 4, 13, seq(1, 101, 5))
-df_test <- tail(data_manual, 90) 
-df_train <- head(data_manual, -90) %>% tail(-1)
-
-ntree_rf_model <- function(s_ntrees, df_train, df_test) {
-prec_results <- data.frame(ntree = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
-
-for (ntree in s_ntrees) {
-  # Fit random forest model on training data
-  rf_model <- randomForest(NextDayLeads.Manual ~ .
-                          -Date, 
-                          data = df_train, 
-                          ntree = ntree,
-                          mtry = round((ncol(df_train) - 2)*0.3),)
+results_manual = data.frame(matrix(ncol = 3, nrow = 0))
+results_website = data.frame(matrix(ncol = 3, nrow = 0))
+names = c("ntrees","rmse.train","rmse.test") 
+colnames(results_manual) <- names
+colnames(results_website) <- names
+# train model for different forest sizes and save results
+for (ntrees in seq(1,300,2)){
+  print(ntrees)
+  rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize =5,keep_tree = FALSE)
+  rf.website <- randomForest(NextDayLeads.Website ~ ., data = website_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize = 5,keep_tree = FALSE)
   
-  # Make predictions on Train & Test Data
-  pred_train <- df_train %>%
-  transmute(NextDayLeads.Manual,
-            yhat = predict(rf_model, newdata <- df_train))
-
-  pred_test <- df_test %>%
-  transmute(NextDayLeads.Manual,
-            yhat = predict(rf_model, newdata <- df_test))
+  pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
+  pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
   
-  # Calculate Train & Test RMSE
-  rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads.Manual)^2))
-  rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads.Manual)^2))
-
- 
-    # Append results to the prec_results data frame
-  prec_results <- rbind(prec_results, data.frame(ntree = ntree, train_rmse = rmse_train, test_rmse = rmse_test))
-  }
-return(prec_results)
+  testRMSE.manual = sqrt(mean((manual_test$NextDayLeads.Manual - pred.manual)^2))
+  testRMSE.website = sqrt(mean((website_test$NextDayLeads.Website - pred.website)^2))
+  
+  result_row_manual = c(ntrees, sqrt(mean(rf.manual$mse)), testRMSE.manual)
+  result_row_website = c(ntrees,sqrt(mean(rf.website$mse)),testRMSE.website)
+  
+  results_manual[nrow(results_manual)+1,] = result_row_manual
+  results_website[nrow(results_website)+1,] = result_row_website
 }
 
-ntree_values <- ntree_rf_model(s_ntrees, df_train, df_test)
+```
+```{r}
+results_manual %>%
+  ggplot( aes(x = ntrees)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))
 
-# Plot precision and specificity of the train and test data. 
-ntree_values %>%
-  ggplot(aes(x = ntree)) +
-  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
-  geom_line(aes(y = test_rmse, color = "Test RMSE")) +
-  scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
-  labs(x = "Ntree", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. ntree") +
-  theme(
-  plot.title = element_text(size = 14),
-  axis.title = element_text(size = 12),
-  axis.text = element_text(size = 10),
-  panel.background = element_rect(fill = "white", color = NA),
-  panel.grid.major = element_line(color = "gray80"),
-  panel.grid.minor = element_line(color = "gray90"),
-  panel.border = element_blank())
+results_website %>%
+  ggplot( aes(x = ntrees)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))
+  
+```
+```{r}
+### check optimal node size parameter with ntree = 150
+results_manual = data.frame(matrix(ncol = 3, nrow = 0))
+results_website = data.frame(matrix(ncol = 3, nrow = 0))
+names = c("node_size","rmse.train","rmse.test") 
+colnames(results_manual) <- names
+colnames(results_website) <- names
+for (node_size in 1:20){
+  rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = 150, importance = TRUE, type = Regression, nodesize =node_size,keep_tree = FALSE)
+  rf.website <- randomForest(NextDayLeads.Website ~ ., data = website_train, ntree = 150, importance = TRUE, type = Regression, nodesize = node_size,keep_tree = FALSE)
+  
+  pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
+  pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
+  
+  testRMSE.manual = sqrt(mean((manual_test$NextDayLeads.Manual - pred.manual)^2))
+  testRMSE.website = sqrt(mean((website_test$NextDayLeads.Website - pred.website)^2))
+  
+  result_row_manual = c(node_size, sqrt(mean(rf.manual$mse)), testRMSE.manual)
+  result_row_website = c(node_size,sqrt(mean(rf.website$mse)),testRMSE.website)
+  
+  results_manual[nrow(results_manual)+1,] = result_row_manual
+  results_website[nrow(results_website)+1,] = result_row_website
+}
+results_manual %>%
+  ggplot( aes(x = node_size)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))
+
+results_website %>%
+  ggplot( aes(x = node_size)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))
+
+
 ```
