@@ -1,0 +1,212 @@
+---
+title: "Data_Preperation"
+author: "Martin Krahl"
+date: "2023-07-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(zoo)
+library(timeDate)
+library(corrplot)
+library(caret)
+library(randomForest)
+```
+#Load Data
+```{r}
+df_Leads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+
+#Data Preprocessing (Leads Data)
+```{r}
+#Deleting Outliers
+#Some observations have uniquely high value. These must be deleted to not effect the regression too much
+
+#The EDA showed that the number of Leads is increasing over time. To allow for a flexible mean and sd, the measures are calculated by year. 
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+summary_data <- df_Leads %>%
+  group_by(Year, Type)%>%
+  summarise(Mean_NextDayLeads = mean(NextDayLeads),
+            Sd_NextDayLeads = sd(NextDayLeads),
+            Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads) %>%  #Threshold is determined to begin 4 Sd over the Mean
+  select(Year, Type, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
+
+df_Leads <- df_Leads %>%
+  filter(Threshold > NextDayLeads) %>%
+  select(-Year, -Threshold)
+
+# Add columns NextDayLeads for each Manual and Website with date 
+data <- df_Leads %>%
+  pivot_wider(names_from = Type, values_from = NextDayLeads) %>%
+  rename(Date = DateCreated, #Rename columns
+         NextDayLeads.Manual = Manual,
+         NextDayLeads.Website = Website)
+```
+
+#Data Preproccesing (Traffic Data)
+```{r}
+#The Traffic Data started late. The first rows which are wrongfully zero have to be deleted. 
+df_Traffic <- df_Traffic[which(df_Traffic$Visits != 0)[1]:nrow(df_Traffic), ]
+```
+
+#Data Prepoccessing (Macro-Economic Data)
+```{r}
+df_Macro <- df_Macro %>%
+  complete(Date = seq(min(Date), max(Date), by = "day"))
+
+#Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
+df_Macro <- df_Macro %>%
+  fill(DAX,
+       `Bundesanleihen 10 Year`,
+       `Gold (in Euro)`,
+       `German Electricity Price`,
+       `Oilprice (Brent)`,
+       `Federal Funds Futures (Expectations in 12 Months)`,
+       `Job Postings in Germany on Indeed`, 
+       `US Economic Policy Uncertainty Index`,
+       `Baltic Exchange Dry Index (BDI)`,
+       `Yield Spread 10Y - 2Y (Germany)`, 
+       `Yield Spread 10Y - 2Y (US)`,
+       `Exchange Rate (1 USD = X EUR)`, 
+       `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
+       .direction = "down")
+```
+
+### Feature Engineering
+```{r}
+#Idea: Add new features and select relevant ones later.
+
+# Add 7 and 30 day rolling Average for NextDayLeads for each Manual and Website Leads.
+data = data %>%
+  mutate(NextDayLeads.Manual.7RA = rollapplyr(NextDayLeads.Manual, 7, mean, partial = TRUE, na.rm = T), # 7 day RA for Manual Leads
+         NextDayLeads.Manual.30RA = rollapplyr(NextDayLeads.Manual, 30, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
+         NextDayLeads.Website.7RA = rollapplyr(NextDayLeads.Website, 7, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
+         NextDayLeads.Website.30RA = rollapplyr(NextDayLeads.Website, 30, mean, partial = TRUE, na.rm = T)) # 30 day RA for Website Leads
+
+
+# group ad data by day and sum up clicks, impressions and money spend per day
+df_Ads <- df_Ads %>%
+  group_by(Date) %>%
+  summarise(AdImpressions = sum(Impressions),
+            AdClicks= sum(Clicks),
+            AdSpend= sum(Spend))
+
+# Add 7 and 30 day rolling Average for Impressions, Clicks and Spend.
+df_Ads = cbind(df_Ads, AdImpressions.7RA = rollapplyr(df_Ads$AdImpressions, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdClicks.7RA = rollapplyr(df_Ads$AdClicks, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdSpend.7RA = rollapplyr(df_Ads$AdSpend, 7, mean, partial = TRUE)) 
+
+
+# Add 7 day rolling Average for Visits and TimeSpent
+df_Traffic = cbind(df_Traffic, Visits.7RA = rollapplyr(df_Traffic$Visits, 7, mean, partial = TRUE)) 
+df_Traffic = cbind(df_Traffic, TimeSpent.7RA = rollapplyr(df_Traffic$TimeSpent, 7, mean, partial = TRUE)) 
+
+
+```
+
+#Data Merging
+```{r}
+#All Joins are Inner Joins. This way we avoid N/A values in the predictor columns. 
+# Merging Website Traffic data 
+data = merge(data, df_Traffic, by="Date")
+# Merging Macro data 
+data = merge(data, df_Macro, by="Date")
+# Merging Ad data 
+data = merge(data, df_Ads, by="Date")
+```
+
+#Feature Engineering based on Date
+```{r}
+# Add Boolean feature IsNextDayWorkDay, which indicates if the NEXT day is a workday (not a weekend or a holiday). Needs Package timeDate. Also add Month Factor Feature
+
+# Get official German Holidays (only country wide)
+holidaysDE = holiday(year= c(2020,2021,2022,2023), Holiday = listHolidays("DE"))
+# add column indicating if the next day is a work day and month variable
+data <- data %>% 
+  mutate(isNextDayWorkDay = if_else(isBizday(as.timeDate(as.Date(Date)+1),holidays = holidaysDE, wday = 1:5), 1, 0),
+         month = factor(month(Date), labels = month.name))
+
+```
+
+#Split Data frames for Manual and Website
+```{r}
+# Rename Cloumns with spaces 
+data_manual <- data %>%
+  select( -NextDayLeads.Website) %>%
+  filter(!is.na(NextDayLeads.Manual))
+
+data_website <- data %>%
+  select( -NextDayLeads.Manual) %>%
+  filter(!is.na(NextDayLeads.Website))
+
+#Delete all other objects
+rm(list = setdiff(ls(), c("data_manual", "data_website")))
+```
+
+### Traning Model: Random Forest with March 2023 as Test set
+```{r}
+#  Test the model on data from the last available Month (March 2023) and train on the rest of the data.
+# Rename columns to remove spaces
+colnames(data_manual) <- make.names(colnames(data_manual), unique=TRUE)
+colnames(data_website) <- make.names(colnames(data_website), unique=TRUE)
+set.seed(123)
+manual_train = data_manual %>% filter(Date <= '2023-01-01') %>% select(-Date)
+manual_test = data_manual %>% filter(Date > '2023-01-01') %>% select(-Date)
+website_train = data_website %>% filter(Date <= '2023-01-01') %>% select(-Date)
+website_test = data_website %>% filter(Date > '2023-01-01') %>% select(-Date)
+
+results_manual = data.frame(matrix(ncol = 3, nrow = 0))
+results_website = data.frame(matrix(ncol = 3, nrow = 0))
+names = c("ntrees","rmse.train","rmse.test") 
+colnames(results_manual) <- names
+colnames(results_website) <- names
+# train model for different forest sizes and save results
+for (ntrees in seq(1,300,2)){
+  print(ntrees)
+  rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize =5,keep_tree = FALSE)
+  rf.website <- randomForest(formula = NextDayLeads.Website ~ ., data = website_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize = 5,keep_tree = FALSE)
+  
+  pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
+  pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
+  
+  testRMSE.manual = sqrt(mean((manual_test$NextDayLeads.Manual - pred.manual)^2))
+  testRMSE.website = sqrt(mean((website_test$NextDayLeads.Website - pred.website)^2))
+  
+  result_row_manual = c(ntrees, sqrt(mean(rf.manual$mse)), testRMSE.manual)
+  result_row_website = c(ntrees,sqrt(mean(rf.website$mse)),testRMSE.website)
+  
+  results_manual[nrow(results_manual)+1,] = result_row_manual
+  results_website[nrow(results_website)+1,] = result_row_website
+}
+
+```
+```{r}
+results_manual %>%
+  ggplot( aes(x = ntrees)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))+
+  geom_smooth(aes(y=rmse.train, se = FALSE))
+
+results_website %>%
+  ggplot( aes(x = ntrees)) + 
+  geom_line(aes(y = rmse.train, color = "rmse.train")) +
+  geom_line(aes(y = rmse.test, color = "rmse.test")) +
+  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red"))+
+  geom_smooth(aes(y=rmse.train, se = FALSE))
+```
