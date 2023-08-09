@@ -229,7 +229,7 @@ window_values_website <- width_model(s_window, df_train_website, df_test_website
 
 #Plotting Width Tuning
 ```{r}
-# Plot RMSE 
+# Plot RMSE   
 window_values_manual %>%
   ggplot(aes(x = width)) +
   geom_line(aes(y = train_rmse, color = "Train RMSE")) +
