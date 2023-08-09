@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#rm(list = ls())
+rm(list = ls())
 library(dplyr)
 library(lubridate)
 library(ggplot2)
@@ -124,6 +124,11 @@ data = data %>%
          NextDayLeads.Manual.7RA = rollapplyr(NextDayLeads.Manual.1RA, 7, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
          NextDayLeads.Website.4RA = rollapplyr(NextDayLeads.Website.1RA, 4, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
          NextDayLeads.Website.7RA = rollapplyr(NextDayLeads.Website.1RA, 7, mean, partial = TRUE, na.rm = T)) %>% # 30 day RA for Website Leads
+  fill(NextDayLeads.Manual.4RA,
+       NextDayLeads.Manual.7RA,
+       NextDayLeads.Website.4RA,
+       NextDayLeads.Website.7RA,
+       .direction = "up") %>%
   select(-NextDayLeads.Manual.1RA, -NextDayLeads.Website.1RA)
 ```
 
@@ -176,7 +181,7 @@ df_website <- data_website %>%
   mutate(NextDayLeads.1RA = lag(NextDayLeads.Website)) %>%
   mutate(NextDayLeads = NextDayLeads.Website) %>% select(-NextDayLeads.Website)
 
-s_window <- seq(1,200,3)
+s_window <- seq(1,50,2)
 df_test_manual <- tail(df_manual, 90) 
 df_train_manual <- head(df_manual, -90) %>% tail(-1)
 df_test_website <- tail(df_website, 90) 
@@ -188,9 +193,11 @@ width_model <- function(s_window, df_train, df_test) {
   for (width in s_window) {
     #Create leadsLastWeek
     df_train <- df_train %>%
-    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T))
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T)) %>%
+      fill(leadsLastWeek, .direction = "up")
     df_test <- df_test %>%
-    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T))
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T)) %>%
+      fill(leadsLastWeek, .direction = "up")
     # Fit random forest model on training data
     lm_model <- lm(NextDayLeads ~ . 
                    -NextDayLeads.1RA -Date,
@@ -273,7 +280,7 @@ results_manual <- data.frame(ntrees = numeric(0), rmse.train = numeric(0), rmse.
 results_website <- data.frame(ntrees = numeric(0), rmse.train = numeric(0), rmse.test = numeric(0))
 
 # train model for different forest sizes and save results
-for (ntrees in seq(1,200,3)){
+for (ntrees in seq(1,100,3)){
   print(ntrees)
   rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize =5,keep_tree = FALSE)
   rf.website <- randomForest(NextDayLeads.Website ~ ., data = website_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize = 5,keep_tree = FALSE)
