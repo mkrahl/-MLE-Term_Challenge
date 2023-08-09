@@ -282,8 +282,22 @@ results_website <- data.frame(ntrees = numeric(0), rmse.train = numeric(0), rmse
 # train model for different forest sizes and save results
 for (ntrees in seq(1,100,3)){
   print(ntrees)
-  rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize =5,keep_tree = FALSE)
-  rf.website <- randomForest(NextDayLeads.Website ~ ., data = website_train, ntree = ntrees, importance = TRUE, type = Regression, nodesize = 5,keep_tree = FALSE)
+  rf.manual <- randomForest(NextDayLeads.Manual ~ . , 
+                            data = manual_train, 
+                            ntree = ntrees, 
+                            mtry = round( sqrt( ncol(manual_train) - 1)),
+                            importance = TRUE, 
+                            type = Regression, 
+                            nodesize = 5,
+                            keep_tree = FALSE)
+  rf.website <- randomForest(NextDayLeads.Website ~ ., 
+                             data = website_train, 
+                             ntree = ntrees, 
+                             mtry = round( sqrt( ncol(website_train) - 1)),
+                             importance = TRUE, 
+                             type = Regression, 
+                             nodesize = 5,
+                             keep_tree = FALSE)
   
   pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
   pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
@@ -343,8 +357,22 @@ names = c("node_size","rmse.train","rmse.test")
 colnames(results_manual) <- names
 colnames(results_website) <- names
 for (node_size in 1:20){
-  rf.manual <- randomForest(NextDayLeads.Manual ~ . , data = manual_train, ntree = 150, importance = TRUE, type = Regression, nodesize =node_size,keep_tree = FALSE)
-  rf.website <- randomForest(NextDayLeads.Website ~ ., data = website_train, ntree = 150, importance = TRUE, type = Regression, nodesize = node_size,keep_tree = FALSE)
+  rf.manual <- randomForest(NextDayLeads.Manual ~ . , 
+                            data = manual_train, 
+                            ntree = 150, 
+                            mtry = round( sqrt( ncol(manual_train) - 1)),
+                            importance = TRUE, 
+                            type = Regression, 
+                            nodesize = node_size,
+                            keep_tree = FALSE)
+  rf.website <- randomForest(NextDayLeads.Website ~ ., 
+                             data = website_train, 
+                             ntree = 150, 
+                             mtry = round( sqrt( ncol(website_train) - 1)),
+                             importance = TRUE, 
+                             type = Regression, 
+                             nodesize = node_size,
+                             keep_tree = FALSE)
   
   pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
   pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
@@ -358,6 +386,8 @@ for (node_size in 1:20){
   results_manual[nrow(results_manual)+1,] = result_row_manual
   results_website[nrow(results_website)+1,] = result_row_website
 }
+
+
 ```
 
 #Plotting Node Size Tuning
