@@ -20,6 +20,8 @@ library(corrplot)
 library(caret)
 library(stringr)
 library(randomForest)
+library(ranger)
+library(broom)
 ```
 #Load Data
 ```{r}
@@ -120,14 +122,14 @@ df_Traffic = cbind(df_Traffic, TimeSpent.7RA = rollapplyr(df_Traffic$TimeSpent, 
 data = data %>%
   mutate(NextDayLeads.Manual.1RA = lag(NextDayLeads.Manual),
          NextDayLeads.Website.1RA = lag(NextDayLeads.Website),
-         NextDayLeads.Manual.4RA = rollapplyr(NextDayLeads.Manual.1RA, 4, mean, partial = TRUE, na.rm = T), # 7 day RA for Manual Leads
-         NextDayLeads.Manual.7RA = rollapplyr(NextDayLeads.Manual.1RA, 7, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
-         NextDayLeads.Website.4RA = rollapplyr(NextDayLeads.Website.1RA, 4, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
-         NextDayLeads.Website.7RA = rollapplyr(NextDayLeads.Website.1RA, 7, mean, partial = TRUE, na.rm = T)) %>% # 30 day RA for Website Leads
-  fill(NextDayLeads.Manual.4RA,
-       NextDayLeads.Manual.7RA,
-       NextDayLeads.Website.4RA,
-       NextDayLeads.Website.7RA,
+         NextDayLeads.Manual.3RA = rollapplyr(NextDayLeads.Manual.1RA, 3, mean, partial = TRUE, na.rm = T), # 7 day RA for Manual Leads
+         NextDayLeads.Manual.10RA = rollapplyr(NextDayLeads.Manual.1RA, 10, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
+         NextDayLeads.Website.3RA = rollapplyr(NextDayLeads.Website.1RA, 3, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
+         NextDayLeads.Website.10RA = rollapplyr(NextDayLeads.Website.1RA, 10, mean, partial = TRUE, na.rm = T)) %>% # 30 day RA for Website Leads
+  fill(NextDayLeads.Manual.3RA,
+       NextDayLeads.Manual.10RA,
+       NextDayLeads.Website.3RA,
+       NextDayLeads.Website.10RA,
        .direction = "up") %>%
   select(-NextDayLeads.Manual.1RA, -NextDayLeads.Website.1RA)
 ```
@@ -172,12 +174,12 @@ data_website <- data %>%
 ```{r}
 #The following graph illustrates how we came up with the width of the rolling mean. The result was then paste into the code above. 
 df_manual <- data_manual %>%
-  select(-NextDayLeads.Manual.4RA, -NextDayLeads.Manual.7RA, -NextDayLeads.Website.4RA, -NextDayLeads.Website.7RA) %>%
+  select(-NextDayLeads.Manual.3RA, -NextDayLeads.Manual.10RA, -NextDayLeads.Website.3RA, -NextDayLeads.Website.10RA) %>%
   mutate(NextDayLeads.1RA = lag(NextDayLeads.Manual)) %>%
   mutate(NextDayLeads = NextDayLeads.Manual) %>% select(-NextDayLeads.Manual)
 
 df_website <- data_website %>%
-  select(-NextDayLeads.Manual.4RA, -NextDayLeads.Manual.7RA, -NextDayLeads.Website.4RA, -NextDayLeads.Website.7RA) %>%
+  select(-NextDayLeads.Manual.3RA, -NextDayLeads.Manual.10RA, -NextDayLeads.Website.3RA, -NextDayLeads.Website.10RA) %>%
   mutate(NextDayLeads.1RA = lag(NextDayLeads.Website)) %>%
   mutate(NextDayLeads = NextDayLeads.Website) %>% select(-NextDayLeads.Website)
 
@@ -267,160 +269,208 @@ window_values_website %>%
 #Clean up workspace
 rm(list = setdiff(ls(), c("data_manual", "data_website")))
 ```
+
+```{r}
 ## Modeling & Hyperparameter Tuning
-```{R}
 #  Test & Train Split. The last month is left as test data. All the rest is stored in the train data.
+
+set.seed(111)
 manual_train = data_manual %>% filter(Date < max(Date) %m-% months(3)) %>% select(-Date)
 manual_test = data_manual %>% filter(Date > max(Date) %m-% months(3)) %>% select(-Date)
 website_train = data_website %>% filter(Date < max(Date) %m-% months(3)) %>% select(-Date)
 website_test = data_website %>% filter(Date > max(Date) %m-% months(3)) %>% select(-Date)
 
-# Initialize results data frame
-results_manual <- data.frame(ntrees = numeric(0), rmse.train = numeric(0), rmse.test = numeric(0))
-results_website <- data.frame(ntrees = numeric(0), rmse.train = numeric(0), rmse.test = numeric(0))
+# train models for tree size up to 500. Keep all other parameters default for now.
+rf_manual = randomForest(
+  formula = NextDayLeads.Manual ~ .,
+  data    = manual_train,
+  xtest   = manual_test %>% select(-NextDayLeads.Manual),
+  ytest   = manual_test$NextDayLeads.Manual,
+  type    = Regression,
+  mtry    = 1
+)
 
-# train model for different forest sizes and save results
-for (ntrees in seq(1,100,3)){
-  print(ntrees)
-  rf.manual <- randomForest(NextDayLeads.Manual ~ . , 
-                            data = manual_train, 
-                            ntree = ntrees, 
-                            mtry = round( sqrt( ncol(manual_train) - 1)),
-                            importance = TRUE, 
-                            type = Regression, 
-                            nodesize = 5,
-                            keep_tree = FALSE)
-  rf.website <- randomForest(NextDayLeads.Website ~ ., 
-                             data = website_train, 
-                             ntree = ntrees, 
-                             mtry = round( sqrt( ncol(website_train) - 1)),
-                             importance = TRUE, 
-                             type = Regression, 
-                             nodesize = 5,
-                             keep_tree = FALSE)
+
+rf_website = randomForest(
+  formula = NextDayLeads.Website ~ .,
+  data    = website_train,
+  xtest   = website_test %>% select(-NextDayLeads.Website),
+  ytest   = website_test$NextDayLeads.Website,
+  type    = Regression
+)
+
+```
+
+```{r}
+## Look at models
+print(rf_manual)
+print(rf_website)
+```
+
+#Plotting Random Forest Results
+```{r}
+# extract train & test errors
+
+results_manual = tibble::tibble(
+  `Train Error` = sqrt(rf_manual$mse),
+  `Test error` = sqrt(rf_manual$test$mse),
+  ntrees = 1:rf_manual$ntree
+) %>% gather(Metric, RMSE, -ntrees)
+
+results_website = tibble::tibble(
+  `Train Error` = sqrt(rf_website$mse),
+  `Test error` = sqrt(rf_website$test$mse),
+  ntrees = 1:rf_website$ntree
+) %>% gather(Metric, RMSE, -ntrees)
+
+# Plot Manual Leads Train and Test RMSE over number of trees
+results_manual %>% ggplot( aes(ntrees, RMSE, color = Metric)) + 
+    geom_line(aes()) +
+    labs(x = "Number of Trees", y = "RMSE", color = "RMSE Type") +
+    ggtitle("Train/Test RMSE  over Number of Trees for Manual Leads") +
+    theme(
+    plot.title = element_text(size = 14),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_line(color = "gray90"),
+    panel.border = element_blank())
+
+# Plot Website Leads Train and Test RMSE over number of trees
+
+results_website %>% ggplot( aes(ntrees, RMSE, color = Metric)) + 
+    geom_line(aes()) +
+    labs(x = "Number of Trees", y = "RMSE", color = "RMSE Type") +
+    ggtitle("Train/Test RMSE  over Number of Trees for Website Leads") +
+    theme(
+    plot.title = element_text(size = 14),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_line(color = "gray90"),
+    panel.border = element_blank())
+```
+```{r}
+# Further Hyper parameter tuning via grid search with ranger for the manual model
+
+hyper_grid <- expand.grid(
+  mtry       = seq(6, 15, by = 2),
+  node_size  = seq(3, 20, by = 2),
+  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  OOB_RMSE   = 0
+)
+print(nrow(hyper_grid))
+for(i in 1:nrow(hyper_grid)) {
   
-  pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
-  pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
+  # train model
+  model <- ranger(
+    formula         = NextDayLeads.Manual ~ ., 
+    data            = data_manual %>% select(-Date), 
+    num.trees       = 300,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sampe_size[i],
+    seed            = 123
+  )
   
-  testRMSE.manual = sqrt(mean((manual_test$NextDayLeads.Manual - pred.manual)^2))
-  testRMSE.website = sqrt(mean((website_test$NextDayLeads.Website - pred.website)^2))
-  
-  result_row_manual = c(ntrees, sqrt(mean(rf.manual$mse)), testRMSE.manual)
-  result_row_website = c(ntrees,sqrt(mean(rf.website$mse)),testRMSE.website)
-  
-  results_manual[nrow(results_manual)+1,] = result_row_manual
-  results_website[nrow(results_website)+1,] = result_row_website
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
 }
+hyper_grid %>% 
+dplyr::arrange(OOB_RMSE) %>%
+tail(10)
 
 ```
-
-#Plotting Ntress Tuning
 ```{r}
-results_manual %>%
-  ggplot( aes(x = ntrees)) + 
-  geom_line(aes(y = rmse.train, color = "rmse.train")) +
-  geom_line(aes(y = rmse.test, color = "rmse.test")) +
-  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red")) +
-  labs(x = "Width", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. Ntree for Website Leads") +
-  theme(
-  plot.title = element_text(size = 14),
-  axis.title = element_text(size = 12),
-  axis.text = element_text(size = 10),
-  panel.background = element_rect(fill = "white", color = NA),
-  panel.grid.major = element_line(color = "gray80"),
-  panel.grid.minor = element_line(color = "gray90"),
-  panel.border = element_blank())
+# Further Hyper parameter tuning via grid search with ranger for the website model
 
-results_website %>%
-  ggplot( aes(x = ntrees)) + 
-  geom_line(aes(y = rmse.train, color = "Train RMSE")) +
-  geom_line(aes(y = rmse.test, color = "Test RMSE")) +
-  scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
-  labs(x = "Width", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. Ntree for Website Leads") +
-  theme(
-  plot.title = element_text(size = 14),
-  axis.title = element_text(size = 12),
-  axis.text = element_text(size = 10),
-  panel.background = element_rect(fill = "white", color = NA),
-  panel.grid.major = element_line(color = "gray80"),
-  panel.grid.minor = element_line(color = "gray90"),
-  panel.border = element_blank())
-```
-
-```{r}
-### check optimal node size parameter with ntree = 150
-results_manual = data.frame(matrix(ncol = 3, nrow = 0))
-results_website = data.frame(matrix(ncol = 3, nrow = 0))
-names = c("node_size","rmse.train","rmse.test") 
-colnames(results_manual) <- names
-colnames(results_website) <- names
-for (node_size in 1:20){
-  rf.manual <- randomForest(NextDayLeads.Manual ~ . , 
-                            data = manual_train, 
-                            ntree = 150, 
-                            mtry = round( sqrt( ncol(manual_train) - 1)),
-                            importance = TRUE, 
-                            type = Regression, 
-                            nodesize = node_size,
-                            keep_tree = FALSE)
-  rf.website <- randomForest(NextDayLeads.Website ~ ., 
-                             data = website_train, 
-                             ntree = 150, 
-                             mtry = round( sqrt( ncol(website_train) - 1)),
-                             importance = TRUE, 
-                             type = Regression, 
-                             nodesize = node_size,
-                             keep_tree = FALSE)
+hyper_grid <- expand.grid(
+  mtry       = seq(6, 15, by = 2),
+  node_size  = seq(3, 20, by = 2),
+  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  OOB_RMSE   = 0
+)
+print(nrow(hyper_grid))
+for(i in 1:nrow(hyper_grid)) {
   
-  pred.manual = mean(predict(rf.manual,newdata = manual_test,type = "response"))
-  pred.website = mean(predict(rf.website,newdata = website_test, type = "response"))
+  # train model
+  model <- ranger(
+    formula         = NextDayLeads.Website ~ ., 
+    data            = data_website %>% select(-Date), 
+    num.trees       = 300,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sampe_size[i],
+    seed            = 123
+  )
   
-  testRMSE.manual = sqrt(mean((manual_test$NextDayLeads.Manual - pred.manual)^2))
-  testRMSE.website = sqrt(mean((website_test$NextDayLeads.Website - pred.website)^2))
-  
-  result_row_manual = c(node_size, sqrt(mean(rf.manual$mse)), testRMSE.manual)
-  result_row_website = c(node_size,sqrt(mean(rf.website$mse)),testRMSE.website)
-  
-  results_manual[nrow(results_manual)+1,] = result_row_manual
-  results_website[nrow(results_website)+1,] = result_row_website
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
 }
-
-
+#sort by best RMSE
+hyper_grid %>% 
+dplyr::arrange(OOB_RMSE) %>%
+#show
+head(10)
 ```
-
-#Plotting Node Size Tuning
+### Final Model formulation 
 ```{r}
-results_manual %>%
-  ggplot( aes(x = node_size)) + 
-  geom_line(aes(y = rmse.train, color = "rmse.train")) +
-  geom_line(aes(y = rmse.test, color = "rmse.test")) +
-  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red")) +
-  labs(x = "Node Size", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. Node Size") +
-  theme(
-  plot.title = element_text(size = 14),
-  axis.title = element_text(size = 12),
-  axis.text = element_text(size = 10),
-  panel.background = element_rect(fill = "white", color = NA),
-  panel.grid.major = element_line(color = "gray80"),
-  panel.grid.minor = element_line(color = "gray90"),
-  panel.border = element_blank())
+#Clean up workspace
+rm(list = setdiff(ls(), c("data_manual", "data_website")))
+set.seed(123)
+# Finally, we define our final models with the optimal hyper parameters.
+# This time, we train on the entire data set instead of using the last month as test data.
 
-results_website %>%
-  ggplot( aes(x = node_size)) + 
-  geom_line(aes(y = rmse.train, color = "rmse.train")) +
-  geom_line(aes(y = rmse.test, color = "rmse.test")) +
-  scale_color_manual(values = c("rmse.train" = "blue", "rmse.test" = "red")) +  
-  labs(x = "Node Size", y = "RMSE", color = "RMSE Type") +
-  ggtitle("Train/Test RMSE  vs. Node Size") +
-  theme(
-  plot.title = element_text(size = 14),
-  axis.title = element_text(size = 12),
-  axis.text = element_text(size = 10),
-  panel.background = element_rect(fill = "white", color = NA),
-  panel.grid.major = element_line(color = "gray80"),
-  panel.grid.minor = element_line(color = "gray90"),
-  panel.border = element_blank())
+final_model_manual = randomForest(
+  formula = NextDayLeads.Manual ~ .,
+  data    = data_manual%>% select(-Date),
+  type    = Regression,
+  mtry    = 14,
+  sampsize = 0.6
+)
+set.seed(123)
+final_model_website = randomForest(
+  formula = NextDayLeads.Website ~ .,
+  data    = data_website%>% select(-Date),
+  type    = Regression,
+  mtry    = 14,
+  sampsize = 0.5
+)
+```
+```{r}
+optimal_ranger_manual = ranger(
+    formula         = NextDayLeads.Manual ~ ., 
+    data            = data_manual %>% select(-Date), 
+    num.trees       = 500,
+    mtry            = 14,
+    sample.fraction = .6,
+    importance      = 'impurity'
+  )
+optimal_ranger_manual$variable.importance %>% 
+  tidy() %>%
+  dplyr::arrange(desc(x)) %>%
+  dplyr::top_n(25) %>%
+  ggplot(aes(reorder(names, x), x)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Top 25 important variables for manual model")
+
+optimal_ranger_website = ranger(
+    formula         = NextDayLeads.Website ~ ., 
+    data            = data_website %>% select(-Date), 
+    num.trees       = 500,
+    mtry            = 14,
+    sample.fraction = .5,
+    importance      = 'impurity'
+  )
+optimal_ranger_website$variable.importance %>% 
+  tidy() %>%
+  dplyr::arrange(desc(x)) %>%
+  dplyr::top_n(25) %>%
+  ggplot(aes(reorder(names, x), x)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Top 25 important variables for website model")
 ```
