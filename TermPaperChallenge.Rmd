@@ -303,6 +303,7 @@ summary_data <- df_Leads %>%
 df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
 
 df_Leads <- df_Leads %>%
+  filter( DateCreated > max(df_Leads$DateCreated) %m-% months(1) | Threshold > NextDayLeads) %>%
   select(-Year, -Threshold)
 
 # Add columns NextDayLeads for each Manual and Website with date 
