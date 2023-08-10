@@ -303,7 +303,7 @@ summary_data <- df_Leads %>%
 df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
 
 df_Leads <- df_Leads %>%
-  filter( DateCreated > max(df_Leads$DateCreated) %m-% months(1) | Threshold > NextDayLeads) %>%
+  filter( DateCreated > max(df_Leads$DateCreated) %m-% months(1) | Threshold > NextDayLeads) %>% # do not remove outliers from last month (Testdata)
   select(-Year, -Threshold)
 
 # Add columns NextDayLeads for each Manual and Website with date 
@@ -620,7 +620,7 @@ results_website %>%
 hyper_grid <- expand.grid(
   mtry       = seq(4, 15, by = 2),
   node_size  = seq(3, 20, by = 2),
-  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  sample_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
   OOB_RMSE   = 0
 )
 print(nrow(hyper_grid))
@@ -633,17 +633,18 @@ for(i in 1:nrow(hyper_grid)) {
     num.trees       = 500,
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$node_size[i],
-    sample.fraction = hyper_grid$sampe_size[i],
+    sample.fraction = hyper_grid$sample_size[i],
     seed            = 123
   )
   
   # add OOB error to grid
   hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
 }
-
-hyper_grid %>% 
-dplyr::arrange(OOB_RMSE) %>%
-head(10)
+#sort by best RMSE
+grid_result_manual = hyper_grid %>% 
+dplyr::arrange(OOB_RMSE)
+#show
+grid_result_manual %>% head(10)
 ```
 
 ```{r}
@@ -651,7 +652,7 @@ head(10)
 hyper_grid <- expand.grid(
   mtry       = seq(4, 15, by = 2),
   node_size  = seq(3, 20, by = 2),
-  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  sample_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
   OOB_RMSE   = 0)
 print(nrow(hyper_grid))
 for(i in 1:nrow(hyper_grid)) {
@@ -663,7 +664,7 @@ for(i in 1:nrow(hyper_grid)) {
     num.trees       = 500,
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$node_size[i],
-    sample.fraction = hyper_grid$sampe_size[i],
+    sample.fraction = hyper_grid$sample_size[i],
     seed            = 123
   )
   
@@ -671,52 +672,47 @@ for(i in 1:nrow(hyper_grid)) {
   hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
 }
 #sort by best RMSE
-hyper_grid %>% 
-dplyr::arrange(OOB_RMSE) %>%
+grid_result_website = hyper_grid %>% 
+dplyr::arrange(OOB_RMSE)
 #show
-head(10)
+grid_result_website %>% head(10)
 ```
 # 4 Final Model formulation 
 ```{r}
 #Clean up workspace
-rm(list = setdiff(ls(), c("data_manual", "data_website")))
+rm(list = setdiff(ls(), c("data_manual", "data_website","grid_result_manual","grid_result_website")))
 set.seed(123)
 # Finally, we define our final models with the optimal hyper parameters.
 # This time, we train on the entire data set instead of using the last month as test data.
 
-final_model_manual = randomForest(
+final_model_manual = ranger(
   formula = NextDayLeads.Manual ~ .,
   data    = data_manual %>% 
-              filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the test data
+              # filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the last month
               select(-Date),
-  type    = Regression,
-  mtry    = 4,
-  sampsize = 0.4)
+  mtry    = head(grid_result_manual$mtry,1),
+  sample.fraction = head(grid_result_manual$sample_size,1),
+  importance ="impurity")
 
-final_model_website = randomForest(
+final_model_website = ranger(
   formula = NextDayLeads.Website ~ .,
   data    = data_website %>% 
-              filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the test data
+              # filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the last month
               select(-Date),
-  type    = Regression,
-  mtry    = 4,
-  sampsize = 0.6)
+  mtry    = head(grid_result_website$mtry,1),
+  sample.fraction =  head(grid_result_website$sample_size,1),
+  importance = "impurity")
+
 
 #The two final models to predict on are 'final_model_manual' and 'final_model_website'.
+#Predictions can be done and accessed via predict(final_model_model, newdata)$predictions
+# We assume that for the new data all data preparation steps have been performed (steps 2.0 - 2.4 except outlier removal.)
 ```
 
 # 5 Evaluation and Feauture Importance
 ```{r}
 #Plotting the most important Features for the Manual Leads
-optimal_ranger_manual <- ranger(
-    formula         = NextDayLeads.Manual ~ ., 
-    data            = data_manual %>% select(-Date), 
-    num.trees       = 500,
-    mtry            = 4,
-    sample.fraction = .6,
-    importance      = 'impurity')
-
-optimal_ranger_manual$variable.importance %>% 
+final_model_manual$variable.importance %>% 
   tidy() %>%
   dplyr::arrange(desc(x)) %>%
   dplyr::top_n(25) %>%
@@ -736,15 +732,8 @@ optimal_ranger_manual$variable.importance %>%
   panel.border = element_blank())
 
 #Plotting the most important Features for the Website Leads
-optimal_ranger_website <- ranger(
-    formula         = NextDayLeads.Website ~ ., 
-    data            = data_website %>% select(-Date), 
-    num.trees       = 500,
-    mtry            = 4,
-    sample.fraction = .5,
-    importance      = 'impurity')
 
-optimal_ranger_website$variable.importance %>% 
+final_model_website$variable.importance %>% 
   tidy() %>%
   dplyr::arrange(desc(x)) %>%
   dplyr::top_n(25) %>%
