@@ -502,4 +502,6 @@ optimal_ranger_website$variable.importance %>%
   panel.grid.major = element_line(color = "gray80"),
   panel.grid.minor = element_line(color = "gray90"),
   panel.border = element_blank())
+
+partialPlot(final_model_manual, data_manual, AdSpend, main = "Partial dependence plot for AdSpend")
 ```
