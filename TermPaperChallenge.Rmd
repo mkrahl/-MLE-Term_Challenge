@@ -703,7 +703,8 @@ final_model_website = ranger(
   sample.fraction =  head(grid_result_website$sample_size,1),
   importance = "impurity")
 
-
+sqrt(final_model_manual$prediction.error)
+sqrt(final_model_website$prediction.error)
 #The two final models to predict on are 'final_model_manual' and 'final_model_website'.
 #Predictions can be done and accessed via predict(final_model_model, newdata)$predictions
 # We assume that for the new data all data preparation steps have been performed (steps 2.0 - 2.4 except outlier removal.)
