@@ -7,6 +7,7 @@ output: html_document
 #Setting up the workspace
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
 rm(list = ls())
 library(dplyr)
 library(lubridate)
@@ -356,7 +357,6 @@ df_Macro <- df_Macro %>% rename(
 #Converting/Replacing special characters
 colnames(df_Macro) <- gsub(" ", "_", colnames(df_Macro))
 colnames(df_Macro) <- gsub("[\\(\\)=\\-]", "", colnames(df_Macro))
-
 ```
 
 # 2.2 Feature Engineering
@@ -408,7 +408,6 @@ holidaysDE = holiday(year= c(2020,2021,2022,2023), Holiday = listHolidays("DE"))
 data <- data %>% 
   mutate(isNextDayWorkDay = if_else(isBizday(as.timeDate(as.Date(Date)+1),holidays = holidaysDE, wday = 1:5), 1, 0),
          month = factor(month(Date), labels = month.name))
-
 ```
 
 # 2.3 Data Merging
@@ -498,7 +497,7 @@ window_values_website <- width_model(s_window, df_train_website, df_test_website
 window_values_manual %>%
   ggplot(aes(x = width)) +
   geom_line(aes(y = test_rmse, color = "Test RMSE")) +
-  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
+  geom_line(aes(y = train_rmse, color = "Train RMSE")) + #Delete this line of code to get graph from the report
   scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
   labs(x = "Width", y = "RMSE", color = "RMSE Type") +
   ggtitle("Train/Test RMSE  vs. Rolling Average width for Manual Leads") +
@@ -514,7 +513,7 @@ window_values_manual %>%
 window_values_website %>%
   ggplot(aes(x = width)) +
   geom_line(aes(y = test_rmse, color = "Test RMSE")) +
-  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
+  geom_line(aes(y = train_rmse, color = "Train RMSE")) + #Delete this line of code to get graph from the report
   scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
   labs(x = "Width", y = "RMSE", color = "RMSE Type") +
   ggtitle("Train/Test RMSE  vs. Rolling average width for Website Leads") +
@@ -583,6 +582,7 @@ results_website <- tibble::tibble(
 
 # Plot Manual Leads Train and Test RMSE over number of trees
 results_manual %>% 
+  #filter(Metric == "Test RMSE") %>% #Use this line to get graph from the report
   ggplot( aes(ntrees, RMSE, color = Metric)) + 
     geom_line(aes()) +
     scale_color_manual(values = c("Test RMSE" = "red", "Train RMSE" = "blue")) + 
@@ -599,6 +599,7 @@ results_manual %>%
 
 # Plot Website Leads Train and Test RMSE over number of trees
 results_website %>% 
+  #filter(Metric == "Test RMSE") %>% #Use this line to get graph from the report
   ggplot( aes(ntrees, RMSE, color = Metric)) + 
     geom_line(aes()) +
     scale_color_manual(values = c("Test RMSE" = "red", "Train RMSE" = "blue")) + 
