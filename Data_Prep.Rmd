@@ -184,7 +184,6 @@ data_website <- data %>%
   filter(!is.na(NextDayLeads.Website))
 ```
 
-
 # 2.5.1 Feature Engineering with rollapply() function
 ```{r}
 #The following graph illustrates how we came up with the width of the rolling mean. The result was then pasted into the code above. 
@@ -322,8 +321,8 @@ print(rf_website)
 ```{r}
 # extract train & test errors
 results_manual <- tibble::tibble(
-  `Train Error` = sqrt(rf_manual$mse),
-  `Test Error` = sqrt(rf_manual$test$mse),
+  `Train RMSE` = sqrt(rf_manual$mse),
+  `Test RMSE` = sqrt(rf_manual$test$mse),
   ntrees = 1:rf_manual$ntree) %>% 
   gather(Metric, RMSE, -ntrees)
 
