@@ -629,7 +629,7 @@ for(i in 1:nrow(hyper_grid)) {
   model <- ranger(
     formula         = NextDayLeads.Manual ~ ., 
     data            = data_manual %>% select(-Date), 
-    num.trees       = 300,
+    num.trees       = 500,
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$node_size[i],
     sample.fraction = hyper_grid$sampe_size[i],
@@ -642,7 +642,7 @@ for(i in 1:nrow(hyper_grid)) {
 
 hyper_grid %>% 
 dplyr::arrange(OOB_RMSE) %>%
-tail(10)
+head(10)
 ```
 
 ```{r}
@@ -659,7 +659,7 @@ for(i in 1:nrow(hyper_grid)) {
   model <- ranger(
     formula         = NextDayLeads.Website ~ ., 
     data            = data_website %>% select(-Date), 
-    num.trees       = 300,
+    num.trees       = 500,
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$node_size[i],
     sample.fraction = hyper_grid$sampe_size[i],
@@ -754,5 +754,5 @@ optimal_ranger_website$variable.importance %>%
   panel.border = element_blank())
 
 #Partial Dependence Plot for the most important variable
-partialPlot(final_model_manual, data_manual, AdSpend, main = "Partial dependence plot for AdSpend")
+#partialPlot(final_model_manual, data_manual, AdSpend, main = "Partial dependence plot for AdSpend")
 ```
