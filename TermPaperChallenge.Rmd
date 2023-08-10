@@ -1,0 +1,758 @@
+---
+title: "TermPaperChallenge"
+author: "Martin Krahl, Marcel Diener, Meeno Wilken"
+date: "2023-07-31"
+output: html_document
+---
+#Setting up the workspace
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(zoo)
+library(reshape2)
+library(timeDate)
+library(corrplot)
+library(caret)
+library(stringr)
+library(randomForest)
+library(ranger)
+library(broom)
+```
+# 1 EDA
+```{r}
+#Loading the data frames
+df_Leads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('Data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+# 1.1 Data Preprocessing: Deleting Outliers
+```{r}
+#Two values are very high (see Plot 2). They have to be deleted
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+#To allow for a flexible mean and sd, the measures are calculated by year. 
+summary_data <- df_Leads %>%
+  group_by(Year = format(DateCreated, "%Y")) %>%
+  summarise(
+    Mean_NextDayLeads = mean(NextDayLeads),
+    Sd_NextDayLeads = sd(NextDayLeads),
+    Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads  #Threshold is determined to begin 4 Sd over the Mean
+  ) %>%
+  select(Year, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = "Year") 
+
+df_Leads <- df_Leads %>%
+  filter(Threshold > NextDayLeads)
+```
+
+# 1.2 Copying graphs from the slides
+```{r}
+#Graph 1: NextDayLeads over Time
+df_Leads %>%
+  ggplot( aes(x = DateCreated,
+              y = NextDayLeads)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads over Time")
+
+#Graph 2: Adds by Clicks, Money Spent, Platform and Funnel
+df_Ads %>%
+  ggplot( aes( x = Spend,
+               y = Clicks,
+               color = Platform,
+               shape = Funnel)) +
+  geom_point() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "Adds by Total Clicks and Money Spent")
+
+#Graph 3: The two variables from the df_Traffic over Time
+df_Traffic %>%
+  pivot_longer(cols = 2:3, names_to = "Type", values_to = "values") %>%
+  ggplot( aes(x = Date,
+              y = values)) +
+  geom_line() +
+  facet_wrap(~Type) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "TimeSpent and Visits from the df_Traffic")
+```
+
+# 1.3 Leads summarizered by Week 
+```{r}
+df <- df_Leads %>%
+  mutate(year_week =  paste( year(DateCreated), week(DateCreated), sep = "-")) %>%
+  group_by(year_week) %>%
+  summarise(sum = sum(NextDayLeads)) 
+
+df %>% ggplot( aes(x = year_week,
+                   y = sum)) +
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black"),
+        axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  labs(title = "NextDayLeads over Time by Week") +
+  scale_x_discrete(breaks = unique(df$year_week)[c(TRUE, rep(FALSE, 9))])
+```
+
+# 1.4 Macro Economic Data
+```{r}
+df <- df_Leads %>%
+  select(DateCreated, NextDayLeads)
+
+df_Macro <- inner_join(df, df_Macro, by = c("DateCreated" = "Date")) #Join NextDayLeads to the Macro Dataframe
+
+#The US Economic Policy Uncertainty Index over the Time Period available
+df_Macro %>%
+  filter(DateCreated >= min(df_Leads$DateCreated),
+         DateCreated <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
+  ggplot( aes( x = DateCreated,
+               y = `US Economic Policy Uncertainty Index`)) +
+  geom_line() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "US Economic Policy Uncertainty Index between 04/04/2020 and 03/31/2023")
+
+#The DAX over the Time Period available
+df_Macro %>%
+  filter(DateCreated >= min(df_Leads$DateCreated),
+         DateCreated <= max(df_Leads$DateCreated)) %>% #Limiting to the time of Leads Data
+  ggplot( aes( x = DateCreated,
+               y = DAX)) +
+  geom_line() +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "Deutscher Aktien Index between 04/04/2020 and 03/31/2023")
+
+
+# Compute correlation matrix using the numeric variables
+corr_matrix <- df_Macro %>%
+  select(-DateCreated) %>%
+  rename(Bundesanleihen = `Bundesanleihen 10 Year`,
+         Oilprice = `Oilprice (Brent)`,
+         FFF = `Federal Funds Futures (Expectations in 12 Months)`,
+         `Job Postings` = `Job Postings in Germany on Indeed`,
+         USEPUI = `US Economic Policy Uncertainty Index`,
+         BDI = `Baltic Exchange Dry Index (BDI)`,
+         `Yield Spread GER` = `Yield Spread 10Y - 2Y (Germany)`,
+         `Yield Spread US` = `Yield Spread 10Y - 2Y (US)`,
+         `USD EUR` = `Exchange Rate (1 USD = X EUR)`,
+         USCB = `US Corporate Bonds - Investment Grade - Option Adjusted Spread`) %>%
+  cor(use="pairwise.complete.obs")
+#Prepare Table: Remove repetitive Values
+corr_matrix[upper.tri(corr_matrix)] <- NA 
+diag(corr_matrix) <- NA
+corr_matrix <- apply(corr_matrix, 2, rev)
+corr_matrix <- corr_matrix[-nrow(corr_matrix), -ncol(corr_matrix)]
+
+melt(corr_matrix) %>%
+# Visualize correlation matrix as a heatmap
+ggplot(aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()) +
+  ggtitle("Pairwise Correlations of the available Macroeconomic Data")
+```
+
+# 1.5 Prepare for EDA to compare NextDayLeads to Macro Data
+```{r}
+#Compute Weekly Measures
+weekly_data <- df_Macro %>%
+  group_by(Week = week(DateCreated), Year = year(DateCreated)) %>%
+  summarise(DAX = last(DAX) - first(DAX),  #Weekly Increase of DAX
+            NextDayLeads = sum(NextDayLeads), #Weekly Sum of NextDayLeads
+            GermanElecPrice = mean(`German Electricity Price`),  #Average Energy Price
+            USEPUI = mean(`US Economic Policy Uncertainty Index`)) #Average US Uncertainty Index
+```
+
+# 1.6 Further EDA for the Macro Economic Data
+```{r}
+weekly_data %>%
+  ggplot( aes(x = DAX, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) +
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by Change in Dax (by Week)",
+       x = "Change in the DAX (difference between first of week to last of week",
+       color = "Year")
+
+weekly_data %>%
+  ggplot( aes(x = USEPUI, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by US Economy Uncertainty Index (by Week)",
+       x = "US Economic Policy Uncertainty Index",
+       color = "Year")
+
+weekly_data %>%
+  ggplot( aes(x = GermanElecPrice, y = NextDayLeads, color = as.character(Year))) + 
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black")) +
+  labs(title = "NextDayLeads by German Elictricity Price (by Week)",
+       x = "Mean German Elictricity Price",
+       color = "Year")
+
+```
+
+# 1.7 EDA for Traffic and Ad Data
+```{r}
+df_Traffic <- df_Traffic %>%
+  left_join(df_Leads, by = c("Date" = "DateCreated"))
+
+# Scatter plot: Visits vs. TimeSpent
+df_Traffic %>%
+  ggplot(aes(x = Visits, y = TimeSpent, color = NextDayLeads)) +
+  geom_point(size = 1.5) + 
+  theme_minimal() + 
+  theme(axis.line = element_line(color = "black"))+
+  labs(x = "Visits", y = "Time Spent", title = "Scatter Plot: Visits by Time Spent and NextDayLeads") +
+  scale_color_gradient(low = "blue", high = "red", na.value = "white")
+
+```
+
+```{r}
+#Aggregate df_ads by Date
+df_Ads <- df_Ads %>%
+  group_by(Date) %>%
+  summarise(Spend = sum(Spend),
+            Impressions = sum(Impressions),
+            Clicks = sum(Clicks))
+
+#Aggregate df_traffic by Date
+#df_Traffic is already joint with df_Leads
+df_Traffic <- df_Traffic %>%
+  group_by(Date) %>%
+  summarise(Visits = sum(Visits),
+            TimeSpent = sum(TimeSpent),
+            NextDayLeads = sum(NextDayLeads))
+
+#Calculate Correlation Matrix
+corr_matrix <- df_Ads %>%
+  left_join(df_Traffic, by = "Date") %>%
+  select(-Date) %>%
+  cor(use="pairwise.complete.obs")
+
+#Prepare Table: Remove repetitive Values
+corr_matrix[upper.tri(corr_matrix)] <- NA 
+diag(corr_matrix) <- NA
+corr_matrix <- apply(corr_matrix, 2, rev)
+corr_matrix <- corr_matrix[-nrow(corr_matrix), -ncol(corr_matrix)]
+
+melt(corr_matrix) %>%
+# Visualize correlation matrix as a heatmap
+ggplot(aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "white") +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()) +
+  ggtitle("Pairwise Correlations of the Traffic, Ads and Leads Data")
+
+```
+#2 Data Preparation
+# Since in the EDA many changes to the data frames have been made, the workspace is cleaned and the data is loaded once again. 
+#Load Data
+```{r}
+rm(list = ls())
+df_Leads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Leads')
+df_Ads <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Ads')
+df_Traffic <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'WebsiteTraffic')
+df_Macro <- readxl::read_xlsx('./data/TermPaperChallenge.xlsx', sheet <- 'Macro')
+```
+
+# 2.1.1 Data Preprocessing (Leads Data)
+```{r}
+#Deleting Outliers
+#Some observations have uniquely high value. These must be deleted to not effect the regression too much
+
+#The EDA showed that the number of Leads is increasing over time. To allow for a flexible mean and sd, the measures are calculated by year. 
+df_Leads <- df_Leads %>%
+  mutate(Year = format(DateCreated, "%Y"))
+
+summary_data <- df_Leads %>%
+  group_by(Year, Type)%>%
+  summarise(Mean_NextDayLeads = mean(NextDayLeads),
+            Sd_NextDayLeads = sd(NextDayLeads),
+            Threshold = Mean_NextDayLeads + 4 * Sd_NextDayLeads) %>%  #Threshold is determined to begin 4 Sd over the Mean
+  select(Year, Type, Threshold)
+
+df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
+
+df_Leads <- df_Leads %>%
+  filter( DateCreated > max(df_Leads$DateCreated) %m-% months(2) | Threshold > NextDayLeads) %>%
+  select(-Year, -Threshold)
+
+# Add columns NextDayLeads for each Manual and Website with date 
+data <- df_Leads %>%
+  pivot_wider(names_from = Type, values_from = NextDayLeads) %>%
+  rename(Date = DateCreated, #Rename columns
+         NextDayLeads.Manual = Manual,
+         NextDayLeads.Website = Website)
+```
+
+# 2.1.2 Data Preproccesing (Traffic Data)
+```{r}
+#The Traffic Data started late. The first rows which are wrongfully zero have to be deleted. 
+df_Traffic <- df_Traffic[which(df_Traffic$Visits != 0)[1]:nrow(df_Traffic), ]
+```
+
+# 2.1.3 Data Prepoccessing (Macro-Economic Data)
+```{r}
+df_Macro <- df_Macro %>%
+  complete(Date = seq(min(Date), max(Date), by = "day"))
+
+#Fill the Macro-Economic Data with the previous values in case of empty values (weekends)
+df_Macro <- df_Macro %>%
+  fill(DAX,
+       `Bundesanleihen 10 Year`,
+       `Gold (in Euro)`,
+       `German Electricity Price`,
+       `Oilprice (Brent)`,
+       `Federal Funds Futures (Expectations in 12 Months)`,
+       `Job Postings in Germany on Indeed`, 
+       `US Economic Policy Uncertainty Index`,
+       `Baltic Exchange Dry Index (BDI)`,
+       `Yield Spread 10Y - 2Y (Germany)`, 
+       `Yield Spread 10Y - 2Y (US)`,
+       `Exchange Rate (1 USD = X EUR)`, 
+       `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
+       .direction = "down")
+
+# Renaming very long column names
+df_Macro <- df_Macro %>% rename(
+  Bundesanleihen = `Bundesanleihen 10 Year`,
+  `Federal Funds Futures` = `Federal Funds Futures (Expectations in 12 Months)`,
+  `Job Postings in Germany` = `Job Postings in Germany on Indeed`,
+  `US Corporate Bonds` = `US Corporate Bonds - Investment Grade - Option Adjusted Spread`,
+  `US Economic Uncertainty Index` = `US Economic Policy Uncertainty Index`,
+  `Exchange Rate USD EUR` = `Exchange Rate (1 USD = X EUR)`,
+  `Yield Spread Germany` = `Yield Spread 10Y - 2Y (Germany)`,
+  `Yield Spread US` = `Yield Spread 10Y - 2Y (US)`
+  )
+
+#Converting/Replacing special characters
+colnames(df_Macro) <- gsub(" ", "_", colnames(df_Macro))
+colnames(df_Macro) <- gsub("[\\(\\)=\\-]", "", colnames(df_Macro))
+
+```
+
+# 2.2 Feature Engineering
+```{r}
+#Idea: Add new features and select relevant ones later.
+
+# group ad data by day and sum up clicks, impressions and money spend per day
+df_Ads <- df_Ads %>%
+  group_by(Date) %>%
+  summarise(AdImpressions = sum(Impressions),
+            AdClicks= sum(Clicks),
+            AdSpend= sum(Spend))
+
+# Add 7 day rolling Average for Impressions, Clicks and Spend.
+df_Ads = cbind(df_Ads, AdImpressions.7RA = rollapplyr(df_Ads$AdImpressions, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdClicks.7RA = rollapplyr(df_Ads$AdClicks, 7, mean, partial = TRUE)) 
+df_Ads = cbind(df_Ads, AdSpend.7RA = rollapplyr(df_Ads$AdSpend, 7, mean, partial = TRUE)) 
+
+
+# Add 7 day rolling Average for Visits and TimeSpent
+df_Traffic = cbind(df_Traffic, Visits.7RA = rollapplyr(df_Traffic$Visits, 7, mean, partial = TRUE)) 
+df_Traffic = cbind(df_Traffic, TimeSpent.7RA = rollapplyr(df_Traffic$TimeSpent, 7, mean, partial = TRUE)) 
+```
+
+```{r}
+# Add 4 and 7 day rolling Average for NextDayLeads for each Manual and Website Leads.
+data = data %>%
+  mutate(NextDayLeads.Manual.1RA = lag(NextDayLeads.Manual),
+         NextDayLeads.Website.1RA = lag(NextDayLeads.Website),
+         NextDayLeads.Manual.3RA = rollapplyr(NextDayLeads.Manual.1RA, 3, mean, partial = TRUE, na.rm = T), # 7 day RA for Manual Leads
+         NextDayLeads.Manual.10RA = rollapplyr(NextDayLeads.Manual.1RA, 10, mean, partial = TRUE, na.rm = T), # 30 day RA for Manual Leads
+         NextDayLeads.Website.3RA = rollapplyr(NextDayLeads.Website.1RA, 3, mean, partial = TRUE, na.rm = T), # 7 day RA for Website
+         NextDayLeads.Website.10RA = rollapplyr(NextDayLeads.Website.1RA, 10, mean, partial = TRUE, na.rm = T)) %>% # 30 day RA for Website Leads
+  fill(NextDayLeads.Manual.3RA,
+       NextDayLeads.Manual.10RA,
+       NextDayLeads.Website.3RA,
+       NextDayLeads.Website.10RA,
+       .direction = "up") %>%
+  select(-NextDayLeads.Manual.1RA, -NextDayLeads.Website.1RA)
+```
+
+# Feature Engineering based on Date
+```{r}
+# Add Boolean feature IsNextDayWorkDay, which indicates if the NEXT day is a workday (not a weekend or a holiday). Needs Package timeDate. Also add Month Factor Feature
+
+# Get official German Holidays (only country wide)
+holidaysDE = holiday(year= c(2020,2021,2022,2023), Holiday = listHolidays("DE"))
+# add column indicating if the next day is a work day and month variable
+data <- data %>% 
+  mutate(isNextDayWorkDay = if_else(isBizday(as.timeDate(as.Date(Date)+1),holidays = holidaysDE, wday = 1:5), 1, 0),
+         month = factor(month(Date), labels = month.name))
+
+```
+
+# 2.3 Data Merging
+```{r}
+#All Joins are Inner Joins. This way we avoid N/A values in the predictor columns. 
+# Merging Website Traffic data 
+data = merge(data, df_Traffic, by="Date")
+# Merging Macro data 
+data = merge(data, df_Macro, by="Date")
+# Merging Ad data 
+data = merge(data, df_Ads, by="Date")
+```
+
+# 2.4 Split Data frames for Manual and Website
+```{r}
+data_manual <- data %>%
+  select(-NextDayLeads.Website) %>%
+  filter(!is.na(NextDayLeads.Manual))
+
+data_website <- data %>%
+  select(-NextDayLeads.Manual) %>%
+  filter(!is.na(NextDayLeads.Website))
+```
+
+# 2.5.1 Feature Engineering with rollapply() function
+```{r}
+#The following graph illustrates how we came up with the width of the rolling mean. The result was then pasted into the code above. 
+df_manual <- data_manual %>%
+  select(-NextDayLeads.Manual.3RA, -NextDayLeads.Manual.10RA, -NextDayLeads.Website.3RA, -NextDayLeads.Website.10RA) %>%
+  mutate(NextDayLeads.1RA = lag(NextDayLeads.Manual)) %>%
+  mutate(NextDayLeads = NextDayLeads.Manual) %>% select(-NextDayLeads.Manual)
+
+df_website <- data_website %>%
+  select(-NextDayLeads.Manual.3RA, -NextDayLeads.Manual.10RA, -NextDayLeads.Website.3RA, -NextDayLeads.Website.10RA) %>%
+  mutate(NextDayLeads.1RA = lag(NextDayLeads.Website)) %>%
+  mutate(NextDayLeads = NextDayLeads.Website) %>% select(-NextDayLeads.Website)
+
+s_window <- seq(1,50,2)
+df_test_manual <- tail(df_manual, 90) 
+df_train_manual <- head(df_manual, -90) %>% tail(-1)
+df_test_website <- tail(df_website, 90) 
+df_train_website <- head(df_website, -90) %>% tail(-1)
+
+width_model <- function(s_window, df_train, df_test) {
+  prec_results <- data.frame(width = numeric(0), rmse_train = numeric(0), rmse_test = numeric(0))
+  
+  for (width in s_window) {
+    #Create leadsLastWeek
+    df_train <- df_train %>%
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T)) %>%
+      fill(leadsLastWeek, .direction = "up")
+    df_test <- df_test %>%
+    mutate(leadsLastWeek = rollapply( NextDayLeads.1RA, width = width, FUN = sum, align = "right", partial = T)) %>%
+      fill(leadsLastWeek, .direction = "up")
+    # Fit random forest model on training data
+    lm_model <- lm(NextDayLeads ~ . 
+                   -NextDayLeads.1RA -Date,
+                   data = df_train)
+    
+    # Make predictions on Train & Test Data
+    pred_train <- df_train %>%
+    transmute(NextDayLeads,
+              yhat = predict(lm_model, newdata <- df_train))
+  
+    pred_test <- df_test %>%
+    transmute(NextDayLeads,
+              yhat = predict(lm_model, newdata <- df_test))
+   
+    # Calculate Train & Test RMSE
+    rmse_train <- sqrt( mean((pred_train$yhat - pred_train$NextDayLeads)^2))
+    rmse_test <- sqrt( mean((pred_test$yhat - pred_test$NextDayLeads)^2))
+  
+   
+      # Append results to the prec_results data frame
+    prec_results <- rbind(prec_results, data.frame(width = width, train_rmse = rmse_train, test_rmse = rmse_test))
+    }
+  return(prec_results)
+}
+
+window_values_manual <- width_model(s_window, df_train_manual, df_test_manual)
+window_values_website <- width_model(s_window, df_train_website, df_test_website)
+```
+
+# 2.5.2 Plotting Width Tuning
+```{r}
+# Plot RMSE   
+window_values_manual %>%
+  ggplot(aes(x = width)) +
+  geom_line(aes(y = test_rmse, color = "Test RMSE")) +
+  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
+  scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
+  labs(x = "Width", y = "RMSE", color = "RMSE Type") +
+  ggtitle("Train/Test RMSE  vs. Rolling Average width for Manual Leads") +
+  theme(
+  plot.title = element_text(size = 14),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  panel.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_line(color = "gray80"),
+  panel.grid.minor = element_line(color = "gray90"),
+  panel.border = element_blank())
+
+window_values_website %>%
+  ggplot(aes(x = width)) +
+  geom_line(aes(y = test_rmse, color = "Test RMSE")) +
+  geom_line(aes(y = train_rmse, color = "Train RMSE")) +
+  scale_color_manual(values = c("Train RMSE" = "blue", "Test RMSE" = "red")) +
+  labs(x = "Width", y = "RMSE", color = "RMSE Type") +
+  ggtitle("Train/Test RMSE  vs. Rolling average width for Website Leads") +
+  theme(
+  plot.title = element_text(size = 14),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  panel.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_line(color = "gray80"),
+  panel.grid.minor = element_line(color = "gray90"),
+  panel.border = element_blank())
+```
+
+# 3 Modelling & Hyperparameter Tuning
+```{r}
+#Clean up workspace
+rm(list = setdiff(ls(), c("data_manual", "data_website")))
+```
+
+# 3.1 Test & Train Split
+```{r}
+# The last months are left as test data. All the rest is stored in the train data.
+set.seed(111)
+manual_train = data_manual %>% filter(Date < max(Date) %m-% months(3)) %>% select(-Date)
+manual_test = data_manual %>% filter(Date > max(Date) %m-% months(3)) %>% select(-Date)
+website_train = data_website %>% filter(Date < max(Date) %m-% months(3)) %>% select(-Date)
+website_test = data_website %>% filter(Date > max(Date) %m-% months(3)) %>% select(-Date)
+```
+
+# 3.2 Initial Model
+```{r}
+# Train models for tree size up to 500. Keep all other parameters default for now.
+rf_manual <- randomForest(
+  formula = NextDayLeads.Manual ~ .,
+  data    = manual_train,
+  xtest   = manual_test %>% select(-NextDayLeads.Manual),
+  ytest   = manual_test$NextDayLeads.Manual,
+  type    = Regression)
+
+rf_website <- randomForest(
+  formula = NextDayLeads.Website ~ .,
+  data    = website_train,
+  xtest   = website_test %>% select(-NextDayLeads.Website),
+  ytest   = website_test$NextDayLeads.Website,
+  type    = Regression)
+
+## Look at models
+print(rf_manual)
+print(rf_website)
+```
+
+# 3.3 Hyperparametric Tuning for ntree
+```{r}
+# extract train & test errors
+results_manual <- tibble::tibble(
+  `Train RMSE` = sqrt(rf_manual$mse),
+  `Test RMSE` = sqrt(rf_manual$test$mse),
+  ntrees = 1:rf_manual$ntree) %>% 
+  gather(Metric, RMSE, -ntrees)
+
+results_website <- tibble::tibble(
+  `Train RMSE` = sqrt(rf_website$mse),
+  `Test RMSE` = sqrt(rf_website$test$mse),
+  ntrees = 1:rf_website$ntree) %>% 
+  gather(Metric, RMSE, -ntrees)
+
+# Plot Manual Leads Train and Test RMSE over number of trees
+results_manual %>% 
+  ggplot( aes(ntrees, RMSE, color = Metric)) + 
+    geom_line(aes()) +
+    scale_color_manual(values = c("Test RMSE" = "red", "Train RMSE" = "blue")) + 
+    labs(x = "Number of Trees", y = "RMSE", color = "RMSE Type") +
+    ggtitle("Train/Test RMSE  over Number of Trees for Manual Leads") +
+    theme(
+    plot.title = element_text(size = 14),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_line(color = "gray90"),
+    panel.border = element_blank())
+
+# Plot Website Leads Train and Test RMSE over number of trees
+results_website %>% 
+  ggplot( aes(ntrees, RMSE, color = Metric)) + 
+    geom_line(aes()) +
+    scale_color_manual(values = c("Test RMSE" = "red", "Train RMSE" = "blue")) + 
+    labs(x = "Number of Trees", y = "RMSE", color = "RMSE Type") +
+    ggtitle("Test/Train RMSE  over Number of Trees for Website Leads") +
+    theme(
+    plot.title = element_text(size = 14),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_line(color = "gray90"),
+    panel.border = element_blank())
+```
+# 3.4 Further Hyperparameter tuning
+```{r}
+# Further Hyper parameter tuning via grid search with ranger for the manual model
+hyper_grid <- expand.grid(
+  mtry       = seq(4, 15, by = 2),
+  node_size  = seq(3, 20, by = 2),
+  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  OOB_RMSE   = 0
+)
+print(nrow(hyper_grid))
+for(i in 1:nrow(hyper_grid)) {
+  
+  # train model
+  model <- ranger(
+    formula         = NextDayLeads.Manual ~ ., 
+    data            = data_manual %>% select(-Date), 
+    num.trees       = 300,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sampe_size[i],
+    seed            = 123
+  )
+  
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+
+hyper_grid %>% 
+dplyr::arrange(OOB_RMSE) %>%
+tail(10)
+```
+
+```{r}
+# Further Hyper parameter tuning via grid search with ranger for the website model
+hyper_grid <- expand.grid(
+  mtry       = seq(4, 15, by = 2),
+  node_size  = seq(3, 20, by = 2),
+  sampe_size = c(0.1,0.2,0.3,0.4,0.5,.6, .7, .8),
+  OOB_RMSE   = 0)
+print(nrow(hyper_grid))
+for(i in 1:nrow(hyper_grid)) {
+  
+  # train model
+  model <- ranger(
+    formula         = NextDayLeads.Website ~ ., 
+    data            = data_website %>% select(-Date), 
+    num.trees       = 300,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sampe_size[i],
+    seed            = 123
+  )
+  
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+#sort by best RMSE
+hyper_grid %>% 
+dplyr::arrange(OOB_RMSE) %>%
+#show
+head(10)
+```
+# 4 Final Model formulation 
+```{r}
+#Clean up workspace
+rm(list = setdiff(ls(), c("data_manual", "data_website")))
+set.seed(123)
+# Finally, we define our final models with the optimal hyper parameters.
+# This time, we train on the entire data set instead of using the last month as test data.
+
+final_model_manual = randomForest(
+  formula = NextDayLeads.Manual ~ .,
+  data    = data_manual %>% select(-Date),
+  type    = Regression,
+  mtry    = 14,
+  sampsize = 0.6)
+
+set.seed(123)
+final_model_website = randomForest(
+  formula = NextDayLeads.Website ~ .,
+  data    = data_website %>% select(-Date),
+  type    = Regression,
+  mtry    = 14,
+  sampsize = 0.5)
+```
+
+# 5 Evaluation and Feauture Importance
+```{r}
+#Plotting the most important Features for the Manual Leads
+optimal_ranger_manual <- ranger(
+    formula         = NextDayLeads.Manual ~ ., 
+    data            = data_manual %>% select(-Date), 
+    num.trees       = 500,
+    mtry            = 14,
+    sample.fraction = .6,
+    importance      = 'impurity')
+
+optimal_ranger_manual$variable.importance %>% 
+  tidy() %>%
+  dplyr::arrange(desc(x)) %>%
+  dplyr::top_n(25) %>%
+  ggplot(aes(reorder(names, x), x)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Top 25 important variables for manual model") +
+  theme(
+  plot.title = element_text(size = 14),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  panel.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_line(color = "gray80"),
+  panel.grid.minor = element_line(color = "gray90"),
+  panel.border = element_blank())
+
+#Plotting the most important Features for the Website Leads
+optimal_ranger_website <- ranger(
+    formula         = NextDayLeads.Website ~ ., 
+    data            = data_website %>% select(-Date), 
+    num.trees       = 500,
+    mtry            = 14,
+    sample.fraction = .5,
+    importance      = 'impurity')
+
+optimal_ranger_website$variable.importance %>% 
+  tidy() %>%
+  dplyr::arrange(desc(x)) %>%
+  dplyr::top_n(25) %>%
+  ggplot(aes(reorder(names, x), x)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Top 25 important variables for website model") +
+  theme(
+  plot.title = element_text(size = 14),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  panel.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_line(color = "gray80"),
+  panel.grid.minor = element_line(color = "gray90"),
+  panel.border = element_blank())
+
+#Partial Dependence Plot for the most important variable
+partialPlot(final_model_manual, data_manual, AdSpend, main = "Partial dependence plot for AdSpend")
+```
