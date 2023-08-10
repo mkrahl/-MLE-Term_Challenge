@@ -303,7 +303,6 @@ summary_data <- df_Leads %>%
 df_Leads <- merge(df_Leads, summary_data, by = c("Year", "Type"))
 
 df_Leads <- df_Leads %>%
-  filter( DateCreated > max(df_Leads$DateCreated) %m-% months(2) | Threshold > NextDayLeads) %>%
   select(-Year, -Threshold)
 
 # Add columns NextDayLeads for each Manual and Website with date 
@@ -686,18 +685,23 @@ set.seed(123)
 
 final_model_manual = randomForest(
   formula = NextDayLeads.Manual ~ .,
-  data    = data_manual %>% select(-Date),
+  data    = data_manual %>% 
+              filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the test data
+              select(-Date),
   type    = Regression,
-  mtry    = 14,
-  sampsize = 0.6)
+  mtry    = 4,
+  sampsize = 0.4)
 
-set.seed(123)
 final_model_website = randomForest(
   formula = NextDayLeads.Website ~ .,
-  data    = data_website %>% select(-Date),
+  data    = data_website %>% 
+              filter(Date <= max(Date) %m-% months(1)) %>% # This line automatically filters out the test data
+              select(-Date),
   type    = Regression,
-  mtry    = 14,
-  sampsize = 0.5)
+  mtry    = 4,
+  sampsize = 0.6)
+
+#The two final models to predict on are 'final_model_manual' and 'final_model_website'.
 ```
 
 # 5 Evaluation and Feauture Importance
@@ -707,7 +711,7 @@ optimal_ranger_manual <- ranger(
     formula         = NextDayLeads.Manual ~ ., 
     data            = data_manual %>% select(-Date), 
     num.trees       = 500,
-    mtry            = 14,
+    mtry            = 4,
     sample.fraction = .6,
     importance      = 'impurity')
 
@@ -718,7 +722,9 @@ optimal_ranger_manual$variable.importance %>%
   ggplot(aes(reorder(names, x), x)) +
   geom_col() +
   coord_flip() +
-  ggtitle("Top 25 important variables for manual model") +
+  labs(x = "Features",
+       y = "Impurity",
+       title = "Top 25 important variables for manual model") +
   theme(
   plot.title = element_text(size = 14),
   axis.title = element_text(size = 12),
@@ -733,7 +739,7 @@ optimal_ranger_website <- ranger(
     formula         = NextDayLeads.Website ~ ., 
     data            = data_website %>% select(-Date), 
     num.trees       = 500,
-    mtry            = 14,
+    mtry            = 4,
     sample.fraction = .5,
     importance      = 'impurity')
 
@@ -744,7 +750,9 @@ optimal_ranger_website$variable.importance %>%
   ggplot(aes(reorder(names, x), x)) +
   geom_col() +
   coord_flip() +
-  ggtitle("Top 25 important variables for website model") +
+  labs(x = "Features",
+       y = "Impurity",
+       title = "Top 25 important variables for website model") +
   theme(
   plot.title = element_text(size = 14),
   axis.title = element_text(size = 12),
